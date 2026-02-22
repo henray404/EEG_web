@@ -1,56 +1,17 @@
 #!/bin/bash
-
-echo ""
-echo "============================================"
-echo "       EEG Analysis Tool - Launcher"
-echo "============================================"
-echo ""
-
-# Pindah ke direktori script
 cd "$(dirname "$0")"
 
-# ========== CEK PYTHON ==========
+# Cek Python
 if ! command -v python3 &> /dev/null; then
-    echo "[INFO] Python tidak ditemukan."
-    echo "       Menginstall via Homebrew..."
-    
-    # Install Homebrew jika belum ada
-    if ! command -v brew &> /dev/null; then
-        echo "[INFO] Menginstall Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    echo "Python tidak ditemukan. Menginstall..."
+    if command -v brew &> /dev/null; then
+        brew install python@3.12
+    else
+        echo "Install Homebrew dulu: https://brew.sh"
+        echo "Lalu jalankan ulang start.sh"
+        exit 1
     fi
-    
-    brew install python@3.12
-    echo "[OK] Python terinstall."
-fi
-echo "[OK] Python ditemukan: $(python3 --version)"
-
-# ========== CEK GIT ==========
-if ! command -v git &> /dev/null; then
-    echo "[INFO] Git tidak ditemukan. Menginstall..."
-    xcode-select --install 2>/dev/null || brew install git
-fi
-echo "[OK] Git ditemukan."
-
-# ========== SETUP VENV ==========
-if [ ! -d ".venv" ]; then
-    echo ""
-    echo "[SETUP] Membuat virtual environment..."
-    python3 -m venv .venv
-    echo "[OK] Virtual environment dibuat."
 fi
 
-# Aktivasi venv
-source .venv/bin/activate
-
-# Install dependencies jika belum
-if ! pip show streamlit &> /dev/null; then
-    echo ""
-    echo "[SETUP] Menginstall dependensi (pertama kali, mohon tunggu)..."
-    pip install -r requirements.txt -q
-    echo "[OK] Dependensi terinstall."
-fi
-
-# ========== JALANKAN ==========
-echo ""
-python launcher.py
+# Jalankan GUI launcher
+python3 launcher.py

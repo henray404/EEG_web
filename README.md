@@ -63,47 +63,62 @@ File EDF ──→ Load (MNE) ──→ Bandpass Filter (1-50 Hz)
 ### Prasyarat
 
 - Python 3.10 atau lebih baru
-- pip (Python package manager)
+- Git (opsional, untuk auto-update)
 
 ### Quick Start (Windows)
 
 ```bash
-# 1. Clone repository
+# 1. Clone atau download ZIP dari repository
 git clone https://github.com/henray404/EEG_web.git
 cd EEG_web
 
-# 2. Double-click start.bat
-# Otomatis: buat venv → install dependensi → cek update → jalankan app
+# 2. Double-click start.bat → muncul window launcher
+# 3. Klik tombol "Mulai Aplikasi" → selesai!
 ```
 
-### Manual Setup
+> **Note**: `start.bat` akan otomatis install Python jika belum ada (via `winget`).
+
+### Quick Start (macOS)
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/henray404/EEG_web.git
 cd EEG_web
 
-# 2. Buat virtual environment
+# 2. Jalankan launcher
+bash start.sh
+
+# 3. Klik tombol "Mulai Aplikasi" → selesai!
+```
+
+### GUI Launcher
+
+Aplikasi dilengkapi **GUI Launcher** (`launcher.py`) yang menangani semua setup secara otomatis:
+
+- ✅ Membuat virtual environment
+- ✅ Menginstall semua dependensi
+- ✅ Memeriksa dan mengunduh update dari GitHub (via `git pull`)
+- ✅ Menjalankan server dan membuka browser
+
+Cukup double-click `start.bat` (Windows) atau `bash start.sh` (macOS), lalu klik **"Mulai Aplikasi"**.
+
+### Manual Setup
+
+```bash
+git clone https://github.com/henray404/EEG_web.git
+cd EEG_web
 python -m venv .venv
 
-# 3. Aktivasi virtual environment
 # Windows:
 .venv\Scripts\activate
 # Mac/Linux:
 source .venv/bin/activate
 
-# 4. Install dependensi
 pip install -r requirements.txt
-
-# 5. Jalankan aplikasi
 streamlit run app.py
 ```
 
 Aplikasi akan terbuka di browser pada `http://localhost:8501`.
-
-### Auto-Update
-
-Aplikasi dilengkapi fitur cek update otomatis melalui `launcher.py`. Saat dijalankan via `start.bat`, aplikasi akan memeriksa `version.txt` di GitHub. Jika ada versi baru, user akan diarahkan ke halaman release untuk download.
 
 ## Penggunaan
 
