@@ -934,6 +934,26 @@ def render_batch_results(cfg):
                         with st.expander("Tabel Delta Lengkap", expanded=True):
                             st.dataframe(delta_df, use_container_width=True,
                                          height=320, hide_index=True)
+                            dl1, dl2 = st.columns(2)
+                            with dl1:
+                                csv_data = delta_df.to_csv(index=False).encode("utf-8")
+                                st.download_button(
+                                    "Download CSV", csv_data,
+                                    file_name=f"delta_{task_a}_vs_{task_b}.csv",
+                                    mime="text/csv", key="dl_delta_csv",
+                                )
+                            with dl2:
+                                import io
+                                excel_buf = io.BytesIO()
+                                with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                                    delta_df.to_excel(writer, index=False, sheet_name="Delta")
+                                    agg_df.to_excel(writer, index=False, sheet_name="Agregat")
+                                st.download_button(
+                                    "Download Excel", excel_buf.getvalue(),
+                                    file_name=f"delta_{task_a}_vs_{task_b}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    key="dl_delta_xlsx",
+                                )
                         with st.expander("Statistik Agregat per Channel/Subband"):
                             st.dataframe(agg_df, use_container_width=True,
                                          hide_index=True)

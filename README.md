@@ -19,6 +19,9 @@ web/
 ├── eeg_processor.py    # Backend pemrosesan EEG (load, filter, fitur, statistik)
 ├── eeg_visualizer.py   # Modul visualisasi (plotly charts)
 ├── config.py           # Konfigurasi default (subband, fitur, warna tema)
+├── launcher.py         # Auto-update checker + launcher
+├── start.bat           # One-click launcher untuk Windows
+├── version.txt         # Versi aplikasi (untuk cek update)
 ├── requirements.txt    # Dependensi Python
 ├── .streamlit/
 │   └── config.toml     # Konfigurasi Streamlit (tema, upload size)
@@ -62,12 +65,23 @@ File EDF ──→ Load (MNE) ──→ Bandpass Filter (1-50 Hz)
 - Python 3.10 atau lebih baru
 - pip (Python package manager)
 
-### Langkah Setup
+### Quick Start (Windows)
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/<username>/<repo>.git
-cd <repo>
+git clone https://github.com/henray404/EEG_web.git
+cd EEG_web
+
+# 2. Double-click start.bat
+# Otomatis: buat venv → install dependensi → cek update → jalankan app
+```
+
+### Manual Setup
+
+```bash
+# 1. Clone repository
+git clone https://github.com/henray404/EEG_web.git
+cd EEG_web
 
 # 2. Buat virtual environment
 python -m venv .venv
@@ -86,6 +100,10 @@ streamlit run app.py
 ```
 
 Aplikasi akan terbuka di browser pada `http://localhost:8501`.
+
+### Auto-Update
+
+Aplikasi dilengkapi fitur cek update otomatis melalui `launcher.py`. Saat dijalankan via `start.bat`, aplikasi akan memeriksa `version.txt` di GitHub. Jika ada versi baru, user akan diarahkan ke halaman release untuk download.
 
 ## Penggunaan
 
