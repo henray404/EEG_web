@@ -3,6 +3,9 @@
 venv/
 env/
 
+# Logs
+launcher.log
+
 # Python cache
 __pycache__/
 *.pyc

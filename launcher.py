@@ -10,9 +10,21 @@ import urllib.request
 import os
 import sys
 import webbrowser
+import logging
+import traceback
+
+# --- FILE LOGGING ---
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.log")
+logging.basicConfig(
+    filename=LOG_FILE, level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logging.info("=" * 50)
+logging.info("Launcher started")
 
 # --- KONFIGURASI ---
-LOCAL_VERSION = "1.0"
+LOCAL_VERSION = "1.1"
 VERSION_URL = "https://raw.githubusercontent.com/henray404/EEG_web/master/version.txt"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, ".venv")
@@ -41,7 +53,7 @@ class LauncherApp:
 
         self._build_ui()
         self.server_process = None
-
+    
     def _build_ui(self):
         bg = "#0B1120"
         card = "#111827"
@@ -112,6 +124,7 @@ class LauncherApp:
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
         self.root.update_idletasks()
+        logging.info(msg)
 
     def set_progress(self, value):
         self.progress["value"] = value
@@ -179,24 +192,45 @@ class LauncherApp:
         self.log("\n🚀 Memulai server EEG Analysis Tool...")
         self.set_progress(90)
 
-        self.server_process = subprocess.Popen(
-            [VENV_PYTHON, "-m", "streamlit", "run", "app.py",
-             "--server.headless", "true"],
+        kwargs = dict(
             cwd=APP_DIR,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1,
         )
+        # Hide console window on Windows
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-        # Wait for server to be ready, then open browser
+        self.server_process = subprocess.Popen(
+            [VENV_PYTHON, "-m", "streamlit", "run", "app.py",
+             "--server.headless", "true"],
+            **kwargs,
+        )
+
+        # Wait for server ready, then open browser
+        server_ready = False
         for line in iter(self.server_process.stdout.readline, ""):
+            logging.debug(f"streamlit: {line.strip()}")
             if "Local URL" in line or "Network URL" in line:
                 url = line.strip().split()[-1]
                 self.log(f"  ✅ Server berjalan: {url}")
                 webbrowser.open("http://localhost:8501")
+                server_ready = True
                 break
             if "error" in line.lower():
                 self.log(f"  ❌ {line.strip()}")
                 break
+
+        # Keep draining stdout in background so Streamlit doesn't block
+        def _drain():
+            try:
+                for line in iter(self.server_process.stdout.readline, ""):
+                    logging.debug(f"streamlit: {line.strip()}")
+            except Exception:
+                pass
+
+        drain_thread = threading.Thread(target=_drain, daemon=True)
+        drain_thread.start()
 
         self.set_progress(100)
         self.log("\n✅ Aplikasi berjalan! Buka browser jika belum terbuka.")
