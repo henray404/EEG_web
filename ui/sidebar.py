@@ -1,18 +1,11 @@
 """
-Modul sidebar — Panel konfigurasi di sidebar Streamlit.
-
-Ditambahkan:
-- Scenario filter (BARU dari pipeline)
-- Session filter (BARU dari pipeline)
-- Max subjects (BARU dari pipeline)
-- Feature type selector (BARU)
-- Bad channel detection toggle (BARU)
+Modul sidebar -- Panel konfigurasi di sidebar Streamlit.
 """
 
 import streamlit as st
 
 from config import (
-    DEFAULT_SUBBANDS, DEFAULT_FEATURES, FREQUENCY_FEATURES,
+    DEFAULT_SUBBANDS, DEFAULT_FEATURES,
     ICA_METHODS, NOTCH_FREQUENCIES,
 )
 from processing.loader import EEGLoader
@@ -28,7 +21,6 @@ def init_state():
         "task_features_df": None,
         "task_summary_df": None,
         "processed": False,
-        # Batch analysis state
         "batch_mode": False,
         "batch_df": None,
         "batch_tasks": [],
@@ -123,24 +115,13 @@ def render_sidebar():
         if uploaded is not None and not batch_mode:
             _load_data(uploaded, upload_type, edf_in_zip)
 
-        # --- Channel Selection ---
+        # Channel & Task: proses semua, filter setelah hasil keluar
         selected_channels = []
-        if st.session_state.raw_info:
-            st.markdown("### Channel")
-            all_ch = st.session_state.raw_info["channels"]
-            selected_channels = st.multiselect(
-                "Channel", all_ch, label_visibility="collapsed",
-            )
-
-        # --- Task Selection ---
         selected_tasks = []
         if st.session_state.processor:
             tasks = st.session_state.processor.get_task_list()
             if tasks:
-                st.markdown("### Task / Marker")
-                selected_tasks = st.multiselect(
-                    "Task", tasks, label_visibility="collapsed",
-                )
+                selected_tasks = tasks
 
         # --- Filter Config ---
         st.markdown("### Filter")
@@ -159,25 +140,22 @@ def render_sidebar():
         selected_subbands = {}
 
         if bp_mode == "Preset Subband":
-            sb_names = st.multiselect(
-                "Subband", list(DEFAULT_SUBBANDS.keys()),
-                label_visibility="collapsed",
-            )
-            selected_subbands = {k: DEFAULT_SUBBANDS[k] for k in sb_names}
-            if sb_names:
-                bp_low = min(v[0] for v in selected_subbands.values())
-                bp_high = max(v[1] for v in selected_subbands.values())
+            selected_subbands = dict(DEFAULT_SUBBANDS)
+            bp_low = min(v[0] for v in selected_subbands.values())
+            bp_high = max(v[1] for v in selected_subbands.values())
         else:
             col_a, col_b = st.columns(2)
             bp_low = col_a.number_input("Low (Hz)", 0.1, 100.0, 0.5, 0.1)
             bp_high = col_b.number_input("High (Hz)", 0.2, 100.0, 49.0, 0.1)
             bp_order = st.slider("Order", 1, 10, 5)
 
-        # --- Bad Channel Detection (BARU) ---
+        # --- Bad Channel Detection ---
         st.markdown("### Deteksi Bad Channel")
-        detect_bad = st.toggle("Deteksi Bad Channel", value=False,
-                                help="Deteksi dan eksklusi channel buruk "
-                                     "berdasarkan variance (MAD threshold)")
+        detect_bad = st.toggle(
+            "Deteksi Bad Channel", value=False,
+            help="Deteksi dan eksklusi channel buruk "
+                 "berdasarkan variance (MAD threshold)",
+        )
 
         # --- ICA ---
         st.markdown("### ICA")
@@ -190,22 +168,9 @@ def render_sidebar():
                 ica_n = st.slider("Komponen", 1, max_comp, min(5, max_comp))
             ica_method = st.selectbox("Metode", ICA_METHODS)
 
-        # --- Features ---
-        st.markdown("### Fitur Statistik")
-
-        # Feature type selector (BARU)
-        all_features = DEFAULT_FEATURES + ["rms"]
-        selected_features = st.multiselect(
-            "Fitur Time-Domain", all_features,
-            label_visibility="collapsed",
-        )
-
-        include_freq = st.toggle(
-            "Fitur Frekuensi (Band Power, Relative Power, Peak Freq)",
-            value=True,
-            help="Hitung band_power, relative_power, dan peak_frequency "
-                 "dari FFT per subband",
-        )
+        # Fitur: pakai semua default (MAV, variance, std)
+        selected_features = list(DEFAULT_FEATURES)
+        include_freq = False
 
         # --- Process ---
         st.divider()

@@ -1,43 +1,53 @@
 # EEG Analysis Tool
 
-Aplikasi web berbasis Streamlit untuk analisis sinyal EEG (Electroencephalography). Dirancang untuk membandingkan data EEG antara subjek ALS dan Normal melalui ekstraksi fitur, analisis delta, dan uji statistik.
+Aplikasi web berbasis Streamlit untuk analisis sinyal EEG (Electroencephalography). Dirancang untuk membandingkan data EEG antara subjek ALS dan Normal melalui ekstraksi fitur dan analisis delta.
 
 ## Fitur Utama
 
 - **Single File Analysis** - Upload dan analisis satu file EDF secara interaktif
 - **Batch Processing** - Upload ZIP berisi banyak file EDF, proses secara paralel (multithreaded)
-- **Distribusi Fitur** - Visualisasi distribusi fitur per task, channel, dan subband
 - **Analisis Delta** - Hitung selisih fitur antar task (misal: Thinking vs Resting)
-- **ALS vs Normal** - Perbandingan statistik antara kelompok ALS dan Normal menggunakan Mann-Whitney U test
 - **Scatter Plot per Subjek** - Visualisasi data individual setiap subjek
+- **Heatmap Delta** - Heatmap perubahan fitur per channel & subband
+- **Transition Delta** - Delta per-subject lalu rata-rata per group
 
 ## Struktur Proyek
 
 ```
 web/
-├── app.py              # Aplikasi utama Streamlit (UI + logic)
-├── eeg_processor.py    # Backend pemrosesan EEG (load, filter, fitur, statistik)
-├── eeg_visualizer.py   # Modul visualisasi (plotly charts)
-├── config.py           # Konfigurasi default (subband, fitur, warna tema)
-├── launcher.py         # Auto-update checker + launcher
-├── start.bat           # One-click launcher untuk Windows
-├── version.txt         # Versi aplikasi (untuk cek update)
-├── requirements.txt    # Dependensi Python
-├── .streamlit/
-│   └── config.toml     # Konfigurasi Streamlit (tema, upload size)
-└── .gitignore
+├── app.py                    # Entry point Streamlit
+├── config.py                 # Konfigurasi (subband, fitur, warna)
+├── launcher.py               # GUI Launcher (Tkinter)
+├── start.bat                 # Launcher Windows
+├── start.sh                  # Launcher macOS/Linux
+├── CHANGELOG.md              # Riwayat perubahan per versi
+├── DISABLED_FEATURES.md      # Rekap fitur yang di-disable
+├── processing/
+│   ├── loader.py             # Load EDF/ZIP, metadata detection
+│   ├── filters.py            # Bandpass, notch, ICA, bad channel
+│   ├── features.py           # Ekstraksi fitur time-domain
+│   ├── delta.py              # Perhitungan delta antar task
+│   └── statistics.py         # Uji statistik
+├── visualization/
+│   ├── signal_plots.py       # Sinyal mentah, PSD, distribusi
+│   ├── feature_plots.py      # Bar, box, grouped bar
+│   └── comparison_plots.py   # Delta chart, heatmap, transition
+└── ui/
+    ├── styles.py             # CSS injection
+    ├── sidebar.py            # Panel sidebar
+    ├── single_file.py        # Halaman analisis file tunggal
+    └── batch.py              # Halaman analisis batch
 ```
 
 ## Pipeline Pemrosesan
 
 ```
-File EDF ──→ Load (MNE) ──→ Bandpass Filter (1-50 Hz)
-         ──→ Extract DataFrame (time × channels + marker)
-         ──→ Filter per Task (berdasarkan annotation/marker)
-         ──→ Subband Filtering (Alpha, Beta, Gamma, dll.)
-         ──→ Ekstraksi Fitur (MAV, Variance, STD)
-         ──→ Analisis Delta (Task A − Task B)
-         ──→ Perbandingan ALS vs Normal (Mann-Whitney U)
+File EDF --> Load (MNE) --> Bandpass Filter (0.5-49 Hz)
+         --> Extract DataFrame (time x channels + marker)
+         --> Filter per Task (berdasarkan annotation/marker)
+         --> Subband Filtering (Delta, Theta, Alpha, Beta, Gamma)
+         --> Ekstraksi Fitur (MAV, Variance, STD)
+         --> Analisis Delta (Task A - Task B)
 ```
 
 ## Fitur Statistik
@@ -63,17 +73,18 @@ File EDF ──→ Load (MNE) ──→ Bandpass Filter (1-50 Hz)
 ### Prasyarat
 
 - Python 3.10 atau lebih baru
+- `tkinter` (biasanya sudah termasuk di Python, kecuali di beberapa distro Linux)
 - Git (opsional, untuk auto-update)
 
 ### Quick Start (Windows)
 
 ```bash
-# 1. Clone atau download ZIP dari repository
+# 1. Clone repository
 git clone https://github.com/henray404/EEG_web.git
 cd EEG_web
 
-# 2. Double-click start.bat → muncul window launcher
-# 3. Klik tombol "Mulai Aplikasi" → selesai!
+# 2. Double-click start.bat
+# 3. Klik tombol "Mulai Aplikasi"
 ```
 
 > **Note**: `start.bat` akan otomatis install Python jika belum ada (via `winget`).
@@ -88,71 +99,99 @@ cd EEG_web
 # 2. Jalankan launcher
 bash start.sh
 
-# 3. Klik tombol "Mulai Aplikasi" → selesai!
+# 3. Klik tombol "Mulai Aplikasi"
 ```
 
-### GUI Launcher
+### Quick Start (Linux)
 
-Aplikasi dilengkapi **GUI Launcher** (`launcher.py`) yang menangani semua setup secara otomatis:
+```bash
+# 1. Clone repository
+git clone https://github.com/henray404/EEG_web.git
+cd EEG_web
 
-- ✅ Membuat virtual environment
-- ✅ Menginstall semua dependensi
-- ✅ Memeriksa dan mengunduh update dari GitHub (via `git pull`)
-- ✅ Menjalankan server dan membuka browser
+# 2. Install Python dan tkinter jika belum ada
+# Ubuntu / Debian:
+sudo apt update
+sudo apt install python3 python3-venv python3-tk
 
-Cukup double-click `start.bat` (Windows) atau `bash start.sh` (macOS), lalu klik **"Mulai Aplikasi"**.
+# Fedora:
+sudo dnf install python3 python3-tkinter
 
-### Manual Setup
+# Arch Linux:
+sudo pacman -S python tk
+
+# 3. Jalankan launcher
+python3 launcher.py
+
+# 4. Klik tombol "Mulai Aplikasi"
+```
+
+> **Note**: Di Linux, `tkinter` tidak selalu terinstall secara default.
+> Jika muncul error `ModuleNotFoundError: No module named 'tkinter'`,
+> install paket `python3-tk` (Debian/Ubuntu) atau `python3-tkinter` (Fedora).
+
+### Manual Setup (Semua OS)
+
+Jika tidak ingin menggunakan GUI Launcher, bisa setup manual:
 
 ```bash
 git clone https://github.com/henray404/EEG_web.git
 cd EEG_web
-python -m venv .venv
 
+# Buat virtual environment
+python3 -m venv .venv
+
+# Aktivasi
 # Windows:
 .venv\Scripts\activate
-# Mac/Linux:
+# macOS / Linux:
 source .venv/bin/activate
 
+# Install dependensi
 pip install -r requirements.txt
+
+# Jalankan Streamlit
 streamlit run app.py
 ```
 
 Aplikasi akan terbuka di browser pada `http://localhost:8501`.
 
+### GUI Launcher
+
+Aplikasi dilengkapi **GUI Launcher** (`launcher.py`) yang menangani setup secara otomatis:
+
+- Membuat virtual environment
+- Menginstall semua dependensi
+- Memeriksa dan mengunduh update dari GitHub (via `git pull`)
+- Menjalankan server dan membuka browser
+- Menampilkan changelog untuk versi terkini
+
 ## Penggunaan
 
 ### Mode Single File
 
-1. Pilih mode **Single File** di sidebar
+1. Pilih **File EDF** di sidebar
 2. Upload file `.edf`
-3. Pilih channel dan subband yang diinginkan
-4. Lihat sinyal mentah, subband, dan hasil fitur ekstraksi
+3. Klik **Proses Data**
+4. Lihat sinyal mentah, subband, dan hasil fitur
 
 ### Mode Batch (ZIP)
 
-1. Pilih mode **Batch (ZIP)** di sidebar
+1. Pilih **File ZIP (dataset)** di sidebar
 2. Upload file ZIP berisi file EDF dengan struktur folder:
    ```
    dataset.zip
    ├── ALS/
    │   ├── ALS01_time1_scenario1/EEG.edf
-   │   ├── ALS01_time1_scenario2/EEG.edf
    │   └── ...
    └── Normal/
        ├── id1_time1_scenario1/EEG.edf
-       ├── id1_time1_scenario2/EEG.edf
        └── ...
    ```
-3. Sistem akan mendeteksi kategori (ALS/Normal), subjek, time, dan scenario dari nama folder
-4. Gunakan tab **Distribusi Fitur**, **Analisis Delta**, atau **Data Mentah** untuk menganalisis
-
-### Perbandingan ALS vs Normal
-
-1. Di tab **Analisis Delta**, centang checkbox **Bandingkan ALS vs Normal**
-2. Pilih mode perbandingan (Delta, Z-score, atau keduanya)
-3. Atur jumlah sampel ALS dan Normal
-4. Hasil: bar chart, p-value table, dan scatter plot per subjek
+3. Aktifkan toggle **Batch Analisis (semua file)**
+4. Klik **Proses Batch**
+5. Gunakan panel filter (Kategori, Skenario, Time, Subband, Channel) untuk eksplorasi data
+6. Lihat hasil di **Analisis Delta**
 
 ## Konfigurasi
 
@@ -175,5 +214,5 @@ Edit `.streamlit/config.toml` untuk:
 | **MNE**       | Membaca dan memproses file EDF/EEG |
 | **NumPy**     | Operasi numerik                    |
 | **Pandas**    | Manipulasi data tabular            |
-| **SciPy**     | Uji statistik (Mann-Whitney U)     |
+| **SciPy**     | Uji statistik                      |
 | **Plotly**    | Visualisasi interaktif             |

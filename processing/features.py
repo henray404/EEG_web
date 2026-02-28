@@ -159,8 +159,6 @@ class EEGFeatures:
                         row[feat] = float(np.var(filtered))
                     elif feat == "std":
                         row[feat] = float(np.std(filtered))
-                    elif feat == "rms":
-                        row[feat] = float(np.sqrt(np.mean(filtered ** 2)))
 
                 # --- Frequency-domain features (BARU) ---
                 if include_frequency:

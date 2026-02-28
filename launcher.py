@@ -9,6 +9,7 @@ import threading
 import urllib.request
 import os
 import sys
+import re
 import webbrowser
 import logging
 import traceback
@@ -24,10 +25,11 @@ logging.info("=" * 50)
 logging.info("Launcher started")
 
 # --- KONFIGURASI ---
-LOCAL_VERSION = "1.2"
+LOCAL_VERSION = "1.3"
 VERSION_URL = "https://raw.githubusercontent.com/henray404/EEG_web/master/version.txt"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, ".venv")
+CHANGELOG_FILE = os.path.join(APP_DIR, "CHANGELOG.md")
 
 if sys.platform == "win32":
     VENV_PYTHON = os.path.join(VENV_DIR, "Scripts", "python.exe")
@@ -37,19 +39,37 @@ else:
     VENV_PIP = os.path.join(VENV_DIR, "bin", "pip")
 
 
+def _read_current_changelog():
+    """Baca changelog untuk versi saat ini dari CHANGELOG.md."""
+    if not os.path.exists(CHANGELOG_FILE):
+        return []
+    try:
+        with open(CHANGELOG_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Cari section untuk versi saat ini
+        pattern = rf"## v{re.escape(LOCAL_VERSION)}.*?\n(.*?)(?=\n## v|\Z)"
+        match = re.search(pattern, content, re.DOTALL)
+        if match:
+            lines = match.group(1).strip().split("\n")
+            return [ln.lstrip("- ").strip() for ln in lines if ln.strip().startswith("-")]
+    except Exception:
+        pass
+    return []
+
+
 class LauncherApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("EEG Analysis Tool")
-        self.root.geometry("520x420")
+        self.root.geometry("520x520")
         self.root.resizable(False, False)
         self.root.configure(bg="#0B1120")
 
         # Center window
         self.root.update_idletasks()
         x = (self.root.winfo_screenwidth() - 520) // 2
-        y = (self.root.winfo_screenheight() - 420) // 2
-        self.root.geometry(f"520x420+{x}+{y}")
+        y = (self.root.winfo_screenheight() - 520) // 2
+        self.root.geometry(f"520x520+{x}+{y}")
 
         self._build_ui()
         self.server_process = None
@@ -65,10 +85,27 @@ class LauncherApp:
         header = tk.Frame(self.root, bg=bg)
         header.pack(fill="x", padx=20, pady=(20, 5))
 
-        tk.Label(header, text="⚡ EEG Analysis Tool", font=("Segoe UI", 18, "bold"),
+        tk.Label(header, text="EEG Analysis Tool", font=("Segoe UI", 18, "bold"),
                  bg=bg, fg=text).pack(anchor="w")
         tk.Label(header, text=f"Versi {LOCAL_VERSION}", font=("Segoe UI", 10),
                  bg=bg, fg=muted).pack(anchor="w")
+
+        # Changelog card
+        changelog_items = _read_current_changelog()
+        if changelog_items:
+            cl_frame = tk.Frame(self.root, bg=card, highlightbackground="#1E293B",
+                                highlightthickness=1)
+            cl_frame.pack(fill="x", padx=20, pady=(10, 0))
+
+            tk.Label(cl_frame, text=f"Pembaruan v{LOCAL_VERSION}",
+                     font=("Segoe UI", 10, "bold"),
+                     bg=card, fg=accent).pack(anchor="w", padx=12, pady=(8, 2))
+
+            changelog_text = "\n".join(f"  - {item}" for item in changelog_items)
+            cl_label = tk.Label(cl_frame, text=changelog_text,
+                                font=("Consolas", 8), bg=card, fg=muted,
+                                justify="left", anchor="nw", wraplength=470)
+            cl_label.pack(fill="x", padx=12, pady=(0, 8))
 
         # Status card
         status_frame = tk.Frame(self.root, bg=card, highlightbackground="#1E293B",
@@ -81,7 +118,7 @@ class LauncherApp:
         self.log_text = tk.Text(status_frame, bg=card, fg=text,
                                 font=("Consolas", 9), bd=0,
                                 highlightthickness=0, wrap="word",
-                                state="disabled", height=10)
+                                state="disabled", height=8)
         self.log_text.pack(fill="both", expand=True, padx=12, pady=(5, 10))
 
         # Progress bar
@@ -102,7 +139,7 @@ class LauncherApp:
         btn_frame.pack(fill="x", padx=20, pady=(0, 20))
 
         self.start_btn = tk.Button(
-            btn_frame, text="▶  Mulai Aplikasi", font=("Segoe UI", 11, "bold"),
+            btn_frame, text="Mulai Aplikasi", font=("Segoe UI", 11, "bold"),
             bg=accent, fg="white", activebackground="#1565C0",
             activeforeground="white", bd=0, padx=20, pady=8,
             cursor="hand2", command=self._on_start,
@@ -110,7 +147,7 @@ class LauncherApp:
         self.start_btn.pack(side="left", expand=True, fill="x", padx=(0, 5))
 
         self.quit_btn = tk.Button(
-            btn_frame, text="✕  Keluar", font=("Segoe UI", 11),
+            btn_frame, text="Keluar", font=("Segoe UI", 11),
             bg="#1E293B", fg=text, activebackground="#374151",
             activeforeground=text, bd=0, padx=20, pady=8,
             cursor="hand2", command=self._on_quit,
@@ -135,61 +172,61 @@ class LauncherApp:
         self.start_btn.configure(state="disabled", bg="#374151")
 
         # Step 1: Check venv
-        self.log("🔍 Memeriksa virtual environment...")
+        self.log("Memeriksa virtual environment...")
         self.set_progress(10)
         if not os.path.exists(VENV_PYTHON):
-            self.log("📦 Membuat virtual environment...")
+            self.log("Membuat virtual environment...")
             subprocess.run([sys.executable, "-m", "venv", VENV_DIR],
                            cwd=APP_DIR, capture_output=True)
-            self.log("  ✅ Virtual environment dibuat.")
+            self.log("  Virtual environment dibuat.")
         else:
-            self.log("  ✅ Virtual environment tersedia.")
+            self.log("  Virtual environment tersedia.")
         self.set_progress(25)
 
         # Step 2: Check dependencies
-        self.log("🔍 Memeriksa dependensi...")
+        self.log("Memeriksa dependensi...")
         result = subprocess.run([VENV_PIP, "show", "streamlit"],
                                 capture_output=True, text=True, cwd=APP_DIR)
         if result.returncode != 0:
-            self.log("📦 Menginstall dependensi (mohon tunggu)...")
+            self.log("Menginstall dependensi (mohon tunggu)...")
             proc = subprocess.run(
                 [VENV_PIP, "install", "-r", "requirements.txt", "-q"],
                 capture_output=True, text=True, cwd=APP_DIR
             )
             if proc.returncode == 0:
-                self.log("  ✅ Dependensi terinstall.")
+                self.log("  Dependensi terinstall.")
             else:
-                self.log(f"  ❌ Gagal: {proc.stderr[:200]}")
+                self.log(f"  Gagal: {proc.stderr[:200]}")
                 self.start_btn.configure(state="normal", bg="#1E88E5")
                 return
         else:
-            self.log("  ✅ Dependensi tersedia.")
+            self.log("  Dependensi tersedia.")
         self.set_progress(50)
 
         # Step 3: Check updates
-        self.log("🌐 Memeriksa pembaruan...")
+        self.log("Memeriksa pembaruan...")
         try:
             response = urllib.request.urlopen(VERSION_URL, timeout=5)
             latest = response.read().decode("utf-8").strip()
             if latest != LOCAL_VERSION:
-                self.log(f"  🆕 Versi baru tersedia: {latest}")
+                self.log(f"  Versi baru tersedia: {latest}")
                 # Try git pull
                 gp = subprocess.run(["git", "pull", "origin", "master"],
                                     capture_output=True, text=True, cwd=APP_DIR)
                 if gp.returncode == 0:
-                    self.log("  ✅ Update berhasil diunduh!")
+                    self.log("  Update berhasil diunduh!")
                     subprocess.run([VENV_PIP, "install", "-r", "requirements.txt", "-q"],
                                    capture_output=True, cwd=APP_DIR)
                 else:
-                    self.log("  ⚠️ Auto-update gagal. Melanjutkan versi lama.")
+                    self.log("  Auto-update gagal. Melanjutkan versi lama.")
             else:
-                self.log("  ✅ Sudah versi terbaru.")
+                self.log("  Sudah versi terbaru.")
         except Exception:
-            self.log("  ℹ️ Tidak ada koneksi internet. Melewati cek update.")
+            self.log("  Tidak ada koneksi internet. Melewati cek update.")
         self.set_progress(75)
 
         # Step 4: Launch Streamlit
-        self.log("\n🚀 Memulai server EEG Analysis Tool...")
+        self.log("\nMemulai server EEG Analysis Tool...")
         self.set_progress(90)
 
         kwargs = dict(
@@ -213,12 +250,12 @@ class LauncherApp:
             logging.debug(f"streamlit: {line.strip()}")
             if "Local URL" in line or "Network URL" in line:
                 url = line.strip().split()[-1]
-                self.log(f"  ✅ Server berjalan: {url}")
+                self.log(f"  Server berjalan: {url}")
                 webbrowser.open("http://localhost:8501")
                 server_ready = True
                 break
             if "error" in line.lower():
-                self.log(f"  ❌ {line.strip()}")
+                self.log(f"  {line.strip()}")
                 break
 
         # Keep draining stdout in background so Streamlit doesn't block
@@ -233,10 +270,10 @@ class LauncherApp:
         drain_thread.start()
 
         self.set_progress(100)
-        self.log("\n✅ Aplikasi berjalan! Buka browser jika belum terbuka.")
-        self.log("   Tekan 'Keluar' untuk menghentikan server.")
+        self.log("\nAplikasi berjalan! Buka browser jika belum terbuka.")
+        self.log("Tekan 'Keluar' untuk menghentikan server.")
 
-        self.start_btn.configure(text="🌐  Buka Browser", state="normal",
+        self.start_btn.configure(text="Buka Browser", state="normal",
                                  bg="#10B981",
                                  command=lambda: webbrowser.open("http://localhost:8501"))
 

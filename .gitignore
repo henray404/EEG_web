@@ -33,6 +33,9 @@ belajar/
 *.fif
 *.bdf
 
+GUIDE.md
+DISABLED_FEATURES.md
+
 # Data / uploads
 uploads/
 data/

@@ -1,5 +1,5 @@
 """
-EEG Analysis Tool — Streamlit Entry Point
+EEG Analysis Tool -- Streamlit Entry Point
 
 Aplikasi utama hanya routing antara:
   1. Analisis file tunggal  (ui.single_file)
@@ -13,7 +13,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="EEG Analysis Tool",
-    page_icon="🧠",
+    page_icon="eeg",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -28,23 +28,22 @@ def main():
     inject_css()
     init_state()
 
-    # ── Sidebar ──
     cfg = render_sidebar()
 
-    # ── Header ──
+    # Header
     st.markdown(
         '<p class="dashboard-header">EEG Analysis Tool</p>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<p class="dashboard-subtitle">'
-        'Analisis sinyal EEG berbasis Streamlit — '
+        'Analisis sinyal EEG berbasis Streamlit -- '
         'filtering, ICA, ekstraksi fitur, delta, dan statistik ALS vs Normal'
         '</p>',
         unsafe_allow_html=True,
     )
 
-    # ── Routing ──
+    # Routing
     if cfg["batch_mode"]:
         if cfg["batch_process"]:
             run_batch_processing(cfg)
