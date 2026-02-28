@@ -282,7 +282,7 @@ def _render_delta_tab(filtered_df, batch_df, batch_tasks, feat_cols,
 
     # Visualisasi checkboxes
     st.markdown("**Pilih Visualisasi:**")
-    show_delta_table = st.checkbox("Tabel Delta & Agregat", value=False, key="show_delta_tbl")
+    show_delta_table = st.checkbox("Tabel Delta", value=False, key="show_delta_tbl")
     show_transition = st.checkbox("Transition Delta per Group", value=False, key="show_transition")
     show_delta_scatter = st.checkbox("Scatter Plot per Subjek", value=False, key="show_delta_scatter")
     show_delta_heat = st.checkbox("Heatmap Delta", value=False, key="show_delta_heat")
@@ -338,8 +338,7 @@ def _render_delta_tables(delta_df, agg_df, task_a, task_b):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_delta_xlsx",
             )
-    with st.expander("Statistik Agregat per Channel/Subband"):
-        st.dataframe(agg_df, use_container_width=True, hide_index=True)
+
 
 
 def _render_transition_delta(filtered_df, task_a, task_b, sel_delta_feat,
