@@ -133,7 +133,7 @@ def run_batch_processing(cfg):
                     if not common_tasks:
                         common_tasks = set(tasks_found)
                     else:
-                        common_tasks &= set(tasks_found)
+                        common_tasks |= set(tasks_found)
             except Exception:
                 pass
 

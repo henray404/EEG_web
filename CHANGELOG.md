@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.1 (2026-03-01)
+
+- Fix batch task: task yang muncul sekarang semua (union), bukan hanya yang ada di semua file (intersection)
+- Fix launcher: tombol tidak terlihat karena changelog terlalu panjang, sekarang changelog scrollable
+- Tambah scikit-learn ke requirements.txt (dibutuhkan ICA fastica)
+
 ## v1.3 (2026-02-28)
 
 - Hapus tab Distribusi Fitur dari batch analysis

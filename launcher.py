@@ -25,7 +25,7 @@ logging.info("=" * 50)
 logging.info("Launcher started")
 
 # --- KONFIGURASI ---
-LOCAL_VERSION = "1.3"
+LOCAL_VERSION = "1.3.1"
 VERSION_URL = "https://raw.githubusercontent.com/henray404/EEG_web/master/version.txt"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, ".venv")
@@ -61,15 +61,15 @@ class LauncherApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("EEG Analysis Tool")
-        self.root.geometry("520x520")
+        self.root.geometry("540x580")
         self.root.resizable(False, False)
         self.root.configure(bg="#0B1120")
 
         # Center window
         self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() - 520) // 2
-        y = (self.root.winfo_screenheight() - 520) // 2
-        self.root.geometry(f"520x520+{x}+{y}")
+        x = (self.root.winfo_screenwidth() - 540) // 2
+        y = (self.root.winfo_screenheight() - 580) // 2
+        self.root.geometry(f"540x580+{x}+{y}")
 
         self._build_ui()
         self.server_process = None
@@ -90,7 +90,7 @@ class LauncherApp:
         tk.Label(header, text=f"Versi {LOCAL_VERSION}", font=("Segoe UI", 10),
                  bg=bg, fg=muted).pack(anchor="w")
 
-        # Changelog card
+        # Changelog card (scrollable, fixed height)
         changelog_items = _read_current_changelog()
         if changelog_items:
             cl_frame = tk.Frame(self.root, bg=card, highlightbackground="#1E293B",
@@ -102,10 +102,13 @@ class LauncherApp:
                      bg=card, fg=accent).pack(anchor="w", padx=12, pady=(8, 2))
 
             changelog_text = "\n".join(f"  - {item}" for item in changelog_items)
-            cl_label = tk.Label(cl_frame, text=changelog_text,
-                                font=("Consolas", 8), bg=card, fg=muted,
-                                justify="left", anchor="nw", wraplength=470)
-            cl_label.pack(fill="x", padx=12, pady=(0, 8))
+            cl_textbox = tk.Text(cl_frame, bg=card, fg=muted,
+                                 font=("Consolas", 8), bd=0,
+                                 highlightthickness=0, wrap="word",
+                                 height=5, state="normal")
+            cl_textbox.insert("1.0", changelog_text)
+            cl_textbox.configure(state="disabled")
+            cl_textbox.pack(fill="x", padx=12, pady=(0, 8))
 
         # Status card
         status_frame = tk.Frame(self.root, bg=card, highlightbackground="#1E293B",
