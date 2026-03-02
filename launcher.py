@@ -26,7 +26,7 @@ logging.info("=" * 50)
 logging.info("Launcher started")
 
 # --- KONFIGURASI ---
-LOCAL_VERSION = "1.6"
+LOCAL_VERSION = "1.7"
 VERSION_URL = "https://raw.githubusercontent.com/henray404/EEG_web/master/version.txt"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, ".venv")
