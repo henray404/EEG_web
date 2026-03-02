@@ -7,6 +7,7 @@ from tkinter import ttk
 import subprocess
 import threading
 import urllib.request
+import ssl
 import os
 import sys
 import re
@@ -25,7 +26,7 @@ logging.info("=" * 50)
 logging.info("Launcher started")
 
 # --- KONFIGURASI ---
-LOCAL_VERSION = "1.5"
+LOCAL_VERSION = "1.6"
 VERSION_URL = "https://raw.githubusercontent.com/henray404/EEG_web/master/version.txt"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, ".venv")
@@ -209,7 +210,16 @@ class LauncherApp:
         # Step 3: Check updates
         self.log("Memeriksa pembaruan...")
         try:
-            response = urllib.request.urlopen(VERSION_URL, timeout=5)
+            # Coba dulu dengan SSL verification normal
+            try:
+                response = urllib.request.urlopen(VERSION_URL, timeout=10)
+            except (urllib.error.URLError, ssl.SSLError):
+                # Fallback: skip SSL verification (umum di WiFi kampus/proxy)
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                response = urllib.request.urlopen(VERSION_URL, timeout=10, context=ctx)
+            
             latest = response.read().decode("utf-8").strip()
             if latest != LOCAL_VERSION:
                 self.log(f"  Versi baru tersedia: {latest}")
@@ -224,8 +234,10 @@ class LauncherApp:
                     self.log("  Auto-update gagal. Melanjutkan versi lama.")
             else:
                 self.log("  Sudah versi terbaru.")
-        except Exception:
-            self.log("  Tidak ada koneksi internet. Melewati cek update.")
+        except Exception as e:
+            err_name = type(e).__name__
+            logging.warning(f"Update check failed: {err_name}: {e}")
+            self.log(f"  Gagal cek update ({err_name}). Melewati.")
         self.set_progress(75)
 
         # Step 4: Launch Streamlit
