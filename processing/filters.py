@@ -116,6 +116,12 @@ class EEGFilters:
                   random_state=42, auto_detect_artifacts=True):
         """Jalankan ICA dan hapus komponen artefak otomatis.
 
+        Deteksi artefak:
+          - EOG (kedipan mata) via channel Fp1/Fp2/F7/F8
+          - Muscle (gerakan otot) via channel T7/T8/TP9/TP10
+        Kedua jenis artefak dideteksi bersamaan dan semua komponen
+        yang teridentifikasi akan dihapus tanpa batas jumlah.
+
         Parameters
         ----------
         loader : EEGLoader
@@ -123,8 +129,7 @@ class EEGFilters:
         method : str
         random_state : int
         auto_detect_artifacts : bool
-            Jika True, gunakan deteksi artefak lengkap dari pipeline
-            (EOG via Fp1/Fp2/F7/F8 + muscle via T7/T8/TP9/TP10).
+            Jika True, gunakan deteksi artefak lengkap dari pipeline.
         """
         if loader.raw is None:
             raise RuntimeError("Data belum dimuat.")
@@ -146,7 +151,7 @@ class EEGFilters:
         bad_ica = []
 
         if auto_detect_artifacts:
-            # --- EOG artifacts (dari pipeline) ---
+            # --- EOG artifacts (kedipan mata) ---
             eog_indices = []
             for ch in loader.raw.ch_names:
                 ch_lower = ch.lower()
@@ -157,24 +162,24 @@ class EEGFilters:
                         )
                         eog_indices.extend(eog_idx)
                     except Exception:
-                        pass
+                        continue
 
-            # --- Muscle artifacts (dari pipeline) ---
-            if not eog_indices:
-                for ch in loader.raw.ch_names:
-                    ch_lower = ch.lower()
-                    if any(x in ch_lower for x in ["t7", "t8", "tp9", "tp10"]):
-                        try:
-                            muscle_idx, _ = ica.find_bads_muscle(
-                                loader.raw, verbose=False
-                            )
-                            eog_indices.extend(muscle_idx)
-                        except Exception:
-                            pass
+            # --- Muscle artifacts (gerakan otot kepala) ---
+            muscle_indices = []
+            for ch in loader.raw.ch_names:
+                ch_lower = ch.lower()
+                if any(x in ch_lower for x in ["t7", "t8", "tp9", "tp10"]):
+                    try:
+                        muscle_idx, _ = ica.find_bads_muscle(
+                            loader.raw, verbose=False
+                        )
+                        muscle_indices.extend(muscle_idx)
+                    except Exception:
+                        continue
 
-            bad_ica = list(set(eog_indices))
+            # Gabungkan semua artefak (EOG + Muscle) tanpa batas
+            bad_ica = list(set(eog_indices + muscle_indices))
         else:
-            # Fallback sederhana
             try:
                 eog_indices, _ = ica.find_bads_eog(loader.raw, verbose=False)
                 if eog_indices:
@@ -183,7 +188,7 @@ class EEGFilters:
                 pass
 
         if bad_ica:
-            ica.exclude = bad_ica[:3]  # Maksimal 3 komponen
+            ica.exclude = bad_ica
         ica.apply(loader.raw, verbose=False)
 
         n_excluded = len(ica.exclude)
