@@ -41,7 +41,7 @@ section[data-testid="stSidebar"] .stMarkdown h1 {{
 section[data-testid="stSidebar"] .stMarkdown h3 {{
     font-size: 0.88rem;
     font-weight: 600;
-    color: {ACCENT_PALE};
+    color: {ACCENT_PRIMARY};
     margin-top: 20px;
     margin-bottom: 6px;
     text-transform: uppercase;
@@ -98,7 +98,7 @@ div[data-testid="stDataFrame"] {{
 /* === Primary button === */
 button[kind="primary"] {{
     background: linear-gradient(135deg, {ACCENT_SECONDARY}, {ACCENT_PRIMARY});
-    color: white;
+    color: #FFFFFF !important;
     border: none;
     border-radius: 10px;
     font-weight: 600;
@@ -107,9 +107,36 @@ button[kind="primary"] {{
     letter-spacing: 0.01em;
 }}
 
+button[kind="primary"] p {{
+    color: #FFFFFF !important;
+}}
+
 button[kind="primary"]:hover {{
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(13, 71, 161, 0.45);
+    box-shadow: 0 6px 20px rgba(13, 71, 161, 0.25);
+}}
+
+/* === Secondary / default button === */
+button[kind="secondary"] {{
+    color: {ACCENT_PRIMARY} !important;
+    border-color: {BORDER_DARK};
+    font-weight: 600;
+}}
+
+button[kind="secondary"] p {{
+    color: {ACCENT_PRIMARY} !important;
+}}
+
+/* === Download button === */
+button[data-testid="stDownloadButton"] button {{
+    color: {ACCENT_PRIMARY} !important;
+    font-weight: 600;
+}}
+
+/* === All button text readable === */
+.stButton button p,
+.stDownloadButton button p {{
+    color: inherit !important;
 }}
 
 /* === Custom elements === */

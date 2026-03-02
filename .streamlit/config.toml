@@ -3,8 +3,8 @@ maxUploadSize = 8192
 maxMessageSize = 1000
 
 [theme]
-base = "dark"
+base = "light"
 primaryColor = "#1E88E5"
-backgroundColor = "#0B1120"
-secondaryBackgroundColor = "#111827"
-textColor = "#F1F5F9"
+backgroundColor = "#F5F8FF"
+secondaryBackgroundColor = "#E8EEFF"
+textColor = "#0F172A"
