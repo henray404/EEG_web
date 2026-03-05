@@ -195,32 +195,32 @@ def render_batch_results(cfg):
         with col2:
             selected_scenarios = scenarios
             if len(scenarios) > 1:
-                selected_scenarios = st.multiselect("Filter Skenario", scenarios, default=scenarios, key="scenario_filter")
+                selected_scenarios = st.multiselect("Filter Skenario", scenarios, default=[], key="scenario_filter")
             st.markdown("---")
             selected_subbands = all_subbands
             if all_subbands:
-                selected_subbands = st.multiselect("Filter Subband", all_subbands, default=all_subbands, key="batch_subband")
+                selected_subbands = st.multiselect("Filter Subband", all_subbands, default=[], key="batch_subband")
 
         with col3:
             selected_times = times
             if len(times) > 1:
-                selected_times = st.multiselect("Filter Time", times, default=times, key="time_filter")
+                selected_times = st.multiselect("Filter Time", times, default=[], key="time_filter")
             st.markdown("---")
             selected_channels_batch = all_channels
             if all_channels:
-                selected_channels_batch = st.multiselect("Filter Channel", all_channels, default=all_channels, key="batch_channel")
+                selected_channels_batch = st.multiselect("Filter Channel", all_channels, default=[], key="batch_channel")
 
     # Aplikasikan filter
     filtered_df = batch_df.copy()
     if active_category != "Semua":
         filtered_df = filtered_df[filtered_df["category"] == active_category]
-    if selected_scenarios and len(selected_scenarios) < len(scenarios):
+    if selected_scenarios:
         filtered_df = filtered_df[filtered_df["scenario"].isin(selected_scenarios)]
-    if selected_times and len(selected_times) < len(times):
+    if selected_times:
         filtered_df = filtered_df[filtered_df["time"].isin(selected_times)]
-    if selected_subbands and len(selected_subbands) < len(all_subbands):
+    if selected_subbands:
         filtered_df = filtered_df[filtered_df["subband"].isin(selected_subbands)]
-    if selected_channels_batch and len(selected_channels_batch) < len(all_channels):
+    if selected_channels_batch:
         filtered_df = filtered_df[filtered_df["channel"].isin(selected_channels_batch)]
 
     meta_cols = {"filename", "category", "subject", "time", "scenario", "task", "channel", "subband"}
@@ -318,7 +318,23 @@ def _render_delta_tab(filtered_df, batch_df, batch_tasks, feat_cols,
 def _render_delta_tables(delta_df, agg_df, task_a, task_b):
     """Render tabel delta dan agregat."""
     with st.expander("Tabel Delta Lengkap", expanded=True):
-        st.dataframe(delta_df, use_container_width=True, height=320, hide_index=True)
+        # Warna per kolom untuk tabel lengkap
+        meta_cols = {"filename", "category", "subject", "time", "scenario",
+                     "task", "channel", "subband"}
+
+        def _color_full_cols(col):
+            if col.name in meta_cols:
+                return ["background-color: #e3f2fd"] * len(col)   # biru muda
+            elif col.name.endswith(f"_{task_a}"):
+                return ["background-color: #e8f5e9"] * len(col)   # hijau muda
+            elif col.name.endswith(f"_{task_b}"):
+                return ["background-color: #fff3e0"] * len(col)   # oranye muda
+            elif col.name.startswith("delta_"):
+                return ["background-color: #fce4ec"] * len(col)   # pink muda
+            return [""] * len(col)
+
+        styled_full = delta_df.style.apply(_color_full_cols)
+        st.dataframe(styled_full, use_container_width=True, height=320, hide_index=True)
         dl1, dl2 = st.columns(2)
         with dl1:
             csv_data = delta_df.to_csv(index=False).encode("utf-8")
@@ -338,6 +354,79 @@ def _render_delta_tables(delta_df, agg_df, task_a, task_b):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_delta_xlsx",
             )
+
+        # --- Fokus satu fitur ---
+        st.markdown("---")
+        st.markdown("**Fokus Satu Fitur**")
+        st.caption("Pilih satu fitur untuk menampilkan tabel yang lebih ringkas.")
+
+        meta_cols = {"filename", "category", "subject", "time", "scenario",
+                     "task", "channel", "subband"}
+        # Deteksi fitur unik dari kolom delta_*
+        delta_feat_cols = [c for c in delta_df.columns
+                          if c.startswith("delta_")]
+        base_features = [c.replace("delta_", "", 1) for c in delta_feat_cols]
+
+        if base_features:
+            sel_focus = st.selectbox(
+                "Pilih Fitur", base_features, key="focus_feat_select",
+            )
+
+            # Kolom yang relevan: meta + task_a value + task_b value + delta
+            col_a = f"{sel_focus}_{task_a}"
+            col_b = f"{sel_focus}_{task_b}"
+            col_delta = f"delta_{sel_focus}"
+
+            # Kumpulkan kolom meta yang ada di delta_df
+            keep_cols = [c for c in delta_df.columns if c in meta_cols]
+            # Tambahkan kolom fitur yang ada
+            for fc in [col_a, col_b, col_delta]:
+                if fc in delta_df.columns:
+                    keep_cols.append(fc)
+            # Fallback: jika kolom per-task tidak ada, cari kolom asli
+            if col_a not in delta_df.columns and col_b not in delta_df.columns:
+                if sel_focus in delta_df.columns:
+                    keep_cols.append(sel_focus)
+                if col_delta in delta_df.columns and col_delta not in keep_cols:
+                    keep_cols.append(col_delta)
+
+            focus_df = delta_df[keep_cols].copy()
+
+            # Warna per kolom
+            def _color_focus_cols(col):
+                if col.name in meta_cols:
+                    return ["background-color: #e3f2fd"] * len(col)  # biru muda (meta)
+                elif col.name == col_a:
+                    return ["background-color: #e8f5e9"] * len(col)  # hijau muda (Task A)
+                elif col.name == col_b:
+                    return ["background-color: #fff3e0"] * len(col)  # oranye muda (Task B)
+                elif col.name == col_delta:
+                    return ["background-color: #fce4ec"] * len(col)  # pink muda (Delta)
+                return [""] * len(col)
+
+            styled_focus = focus_df.style.apply(_color_focus_cols)
+            st.dataframe(styled_focus, use_container_width=True, height=320,
+                         hide_index=True)
+
+            fl1, fl2 = st.columns(2)
+            with fl1:
+                csv_focus = focus_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download CSV (Fokus)", csv_focus,
+                    file_name=f"delta_{sel_focus}_{task_a}_vs_{task_b}.csv",
+                    mime="text/csv", key="dl_focus_csv",
+                )
+            with fl2:
+                excel_focus = io.BytesIO()
+                with pd.ExcelWriter(excel_focus, engine="openpyxl") as writer:
+                    focus_df.to_excel(writer, index=False,
+                                     sheet_name=sel_focus[:31])
+                st.download_button(
+                    "Download Excel (Fokus)", excel_focus.getvalue(),
+                    file_name=f"delta_{sel_focus}_{task_a}_vs_{task_b}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_focus_xlsx",
+                )
 
 
 

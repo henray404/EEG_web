@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8 (2026-03-05)
+
+- Filter batch (Skenario, Time, Subband, Channel) default kosong -- tidak semua terpilih saat awal
+- Tambah fitur "Fokus Satu Fitur" di Tabel Delta Lengkap: pilih satu fitur untuk tabel ringkas dengan download terpisah
+- Tambah pewarnaan kolom pada tabel delta (lengkap & fokus): biru muda (meta), hijau muda (Task A), oranye muda (Task B), pink muda (Delta)
+
 ## v1.3.1 (2026-03-01)
 
 - Fix batch task: task yang muncul sekarang semua (union), bukan hanya yang ada di semua file (intersection)
