@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.9 (2026-03-06)
+
+- Tambah subband baru: Mu (8-12 Hz), Low Beta (12-16 Hz), High Beta (20-30 Hz)
+- Tambah Amplitude Filter: clipping sinyal EEG ke ±100 µV
+- Tambah perhitungan ERD/ERS (Event-Related De/Synchronization) dengan baseline Resting
+- Tambah tombol Semua/Hapus di setiap filter batch (Skenario, Time, Subband, Channel)
+- Tambah Tabel Fitur per Task: tabel pivot per channel/subband tanpa delta, format sesuai kebutuhan riset
+- Download Excel (Fitur per Task) menggunakan format Grid kustom per sheet (`Fitur_Task_Kategori`),
+  menampilkan channel berdampingan.
+- Batch processing sekarang menggunakan occurrence pertama tiap task (lebih murni)
+- Download Excel: nilai sangat kecil otomatis dikonversi ke satuan µ (micro)
+- Scatter plot: background diubah ke putih agar lebih jelas
+
 ## v1.8 (2026-03-05)
 
 - Filter batch (Skenario, Time, Subband, Channel) default kosong -- tidak semua terpilih saat awal

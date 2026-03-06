@@ -298,7 +298,128 @@ class EEGFeatures:
         agg = occ_df.groupby(group_cols, as_index=False)[feat_cols].mean()
         return agg
 
+    # ------------------------------------------------------------------ #
+    #  First occurrence only (BARU)                                        #
+    # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def compute_first_occurrence_features(loader, df, channels, tasks,
+                                          subbands=None, features=None,
+                                          include_frequency=True):
+        """Hitung fitur hanya dari occurrence pertama tiap task.
+
+        Occurrence pertama dianggap lebih 'murni' karena subjek belum
+        terpengaruh repetisi.
+
+        Parameters
+        ----------
+        loader : EEGLoader
+        df : pd.DataFrame
+        channels, tasks, subbands, features, include_frequency: sama.
+
+        Returns
+        -------
+        pd.DataFrame  Kolom: task, channel, subband, + fitur.
+        """
+        occurrences = loader.get_task_occurrences()
+        if not occurrences:
+            # Fallback ke compute_task_features jika tidak ada occurrence info
+            return EEGFeatures.compute_task_features(
+                loader, df, channels, tasks, subbands, features,
+                include_frequency=include_frequency,
+            )
+
+        # Ambil hanya occurrence pertama per task
+        first_seen = set()
+        all_rows = []
+        for occ in occurrences:
+            task_name = occ["task"]
+            if task_name in first_seen or task_name not in tasks:
+                continue
+            first_seen.add(task_name)
+
+            seg = loader.extract_occurrence_segment(df, task_name, 1)
+            if seg.empty or len(seg) < 4:
+                continue
+
+            feat_df = EEGFeatures.compute_subband_features(
+                seg, channels, loader.sfreq, subbands, features,
+                include_frequency=include_frequency,
+            )
+            if feat_df.empty:
+                continue
+
+            feat_df.insert(0, "task", task_name)
+            all_rows.append(feat_df)
+
+        if all_rows:
+            return pd.concat(all_rows, ignore_index=True)
+        return pd.DataFrame()
+
+    # ------------------------------------------------------------------ #
+    #  ERD/ERS (Event-Related De/Synchronization)                          #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def compute_erd_ers(batch_df, baseline_task="Resting",
+                        feature_col="mav"):
+        """Hitung ERD/ERS relatif terhadap baseline task.
+
+        ERD/ERS = ((Power_Task - Power_Baseline) / Power_Baseline) × 100%
+
+        Negatif = ERD (desynchronization), Positif = ERS (synchronization).
+
+        Parameters
+        ----------
+        batch_df : pd.DataFrame
+            Hasil batch processing (kolom: task, channel, subband, filename, + fitur).
+        baseline_task : str
+            Task baseline (default: 'Resting').
+        feature_col : str
+            Kolom fitur yang digunakan untuk perhitungan (default: 'mav').
+
+        Returns
+        -------
+        pd.DataFrame  Kolom: filename, task, channel, subband,
+                       baseline_value, task_value, erd_ers_pct.
+        """
+        if feature_col not in batch_df.columns:
+            return pd.DataFrame()
+
+        baseline = batch_df[batch_df["task"] == baseline_task].copy()
+        tasks_other = batch_df[batch_df["task"] != baseline_task].copy()
+
+        if baseline.empty or tasks_other.empty:
+            return pd.DataFrame()
+
+        merge_keys = ["filename", "channel", "subband"]
+        # Hanya gunakan kolom yang ada
+        merge_keys = [k for k in merge_keys if k in baseline.columns]
+
+        merged = pd.merge(
+            tasks_other[merge_keys + ["task", feature_col]],
+            baseline[merge_keys + [feature_col]],
+            on=merge_keys, suffixes=("_task", "_baseline"),
+        )
+
+        if merged.empty:
+            return pd.DataFrame()
+
+        col_task = f"{feature_col}_task"
+        col_base = f"{feature_col}_baseline"
+
+        result = merged[merge_keys + ["task"]].copy()
+        result["baseline_value"] = merged[col_base]
+        result["task_value"] = merged[col_task]
+
+        # ERD/ERS = ((task - baseline) / baseline) × 100
+        result["erd_ers_pct"] = np.where(
+            merged[col_base] != 0,
+            ((merged[col_task] - merged[col_base]) / merged[col_base]) * 100.0,
+            0.0,
+        )
+
+        return result
 
     @staticmethod
     def compute_band_ratios(features_df, ratios=None):

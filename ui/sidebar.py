@@ -131,6 +131,11 @@ def render_sidebar():
         if use_notch:
             notch_freq = st.selectbox("Frekuensi Notch (Hz)", NOTCH_FREQUENCIES)
 
+        use_amplitude = st.toggle(
+            "Amplitude Filter", value=False,
+            help="Clipping sinyal ke ±100 µV untuk menghilangkan artefak amplitudo tinggi",
+        )
+
         bp_mode = st.radio(
             "Bandpass", ["Preset Subband", "Custom Range"],
             horizontal=True, label_visibility="collapsed",
@@ -202,6 +207,7 @@ def render_sidebar():
             "bp_high": bp_high,
             "bp_order": bp_order,
             "detect_bad": detect_bad,
+            "use_amplitude": use_amplitude,
             "use_ica": use_ica,
             "ica_n": ica_n,
             "ica_method": ica_method,

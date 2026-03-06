@@ -95,6 +95,10 @@ def run_processing(loader: EEGLoader, cfg):
                     )
                 st.warning(f"Bad channel ditemukan dan dieksklusi: {bad_chs}")
 
+        # Amplitude filter
+        if cfg.get("use_amplitude"):
+            EEGFilters.apply_amplitude_filter(loader)
+
         if cfg["use_notch"]:
             EEGFilters.apply_notch(loader, freq=cfg["notch_freq"])
 

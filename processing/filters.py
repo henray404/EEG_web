@@ -9,7 +9,7 @@ import mne
 from mne.preprocessing import ICA
 from scipy.signal import butter, filtfilt
 
-from config import BAD_CHANNEL_THRESHOLD
+from config import BAD_CHANNEL_THRESHOLD, AMPLITUDE_MAX_UV
 
 
 class EEGFilters:
@@ -73,6 +73,39 @@ class EEGFilters:
         bad_idx = np.where(np.abs(variances - median_var) > threshold * mad)[0]
         bad_channels = [raw.ch_names[i] for i in bad_idx]
         return bad_channels
+
+    # ------------------------------------------------------------------ #
+    #  Amplitude filter                                                   #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def apply_amplitude_filter(loader, max_uv=None):
+        """Clipping sinyal EEG ke ±max_uv µV.
+
+        Sinyal EEG normal biasanya < 100 µV.  Nilai di atas threshold
+        di-clip untuk mengurangi artefak amplitudo tinggi.
+
+        Parameters
+        ----------
+        loader : EEGLoader
+            Loader instance dengan raw data.
+        max_uv : float | None
+            Threshold amplitudo dalam µV. Default dari config.
+        """
+        if loader.raw is None:
+            raise RuntimeError("Data belum dimuat.")
+
+        if max_uv is None:
+            max_uv = AMPLITUDE_MAX_UV
+
+        # MNE menyimpan data dalam Volt, konversi µV → V
+        max_v = max_uv * 1e-6
+
+        data = loader.raw.get_data()
+        clipped = np.clip(data, -max_v, max_v)
+        loader.raw._data = clipped
+
+        loader.processing_log.append(f"Amplitude filter: ±{max_uv} µV")
 
     # ------------------------------------------------------------------ #
     #  Notch filter                                                       #

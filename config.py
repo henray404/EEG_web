@@ -11,10 +11,16 @@ Aksen warna berdasarkan logo ITS Robocon (biru).
 DEFAULT_SUBBANDS = {
     "Delta": (0.5, 4),
     "Theta": (4, 8),
+    "Mu": (8, 12),
     "Alpha": (8, 13),
+    "Low_Beta": (12, 16),
+    "High_Beta": (20, 30),
     "Beta": (13, 30),
     "Gamma": (30, 49),
 }
+
+# Threshold amplitudo EEG (µV) — sinyal di atas ini dianggap artefak
+AMPLITUDE_MAX_UV = 100.0
 
 # Fitur statistik dasar (time‑domain)
 DEFAULT_FEATURES = ["mav", "variance", "std"]
