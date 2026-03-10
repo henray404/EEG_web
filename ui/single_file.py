@@ -177,6 +177,12 @@ def render_results(loader: EEGLoader, cfg):
             '<p class="section-title">Filter Hasil</p>',
             unsafe_allow_html=True,
         )
+        
+        def _sel_all(k, opts):
+            st.session_state[k] = list(opts)
+        def _clr_all(k):
+            st.session_state[k] = []
+
         fc1, fc2 = st.columns(2)
 
         selected_subbands = all_subbands
@@ -184,12 +190,18 @@ def render_results(loader: EEGLoader, cfg):
 
         with fc1:
             if all_subbands:
+                c1, c2 = st.columns(2)
+                c1.button("Semua Subband", key="sa_sb_sf", on_click=_sel_all, args=("sf_subband_filter", all_subbands))
+                c2.button("Hapus", key="cl_sb_sf", on_click=_clr_all, args=("sf_subband_filter",))
                 selected_subbands = st.multiselect(
                     "Subband", all_subbands, default=all_subbands,
                     key="sf_subband_filter",
                 )
         with fc2:
             if all_channels_feat:
+                c1, c2 = st.columns(2)
+                c1.button("Semua Channel", key="sa_ch_sf", on_click=_sel_all, args=("sf_channel_filter", all_channels_feat))
+                c2.button("Hapus", key="cl_ch_sf", on_click=_clr_all, args=("sf_channel_filter",))
                 selected_channels_feat = st.multiselect(
                     "Channel", all_channels_feat, default=all_channels_feat,
                     key="sf_channel_filter",
@@ -451,10 +463,19 @@ def _render_task_section(loader, df, channels, tasks, task_features_df,
     # --- Feature comparison ---
     if active_feat_df is not None and not active_feat_df.empty:
         # Subband + channel filters
+        
+        def _sel_all(k, opts):
+            st.session_state[k] = list(opts)
+        def _clr_all(k):
+            st.session_state[k] = []
+
         filter_cols = st.columns(2)
         with filter_cols[0]:
             all_sb = sorted(active_feat_df["subband"].unique().tolist()) if "subband" in active_feat_df.columns else []
             if all_sb:
+                c1, c2 = st.columns(2)
+                c1.button("Semua", key="sa_sb_task", on_click=_sel_all, args=("task_subband_filter", all_sb))
+                c2.button("Hapus", key="cl_sb_task", on_click=_clr_all, args=("task_subband_filter",))
                 sel_sb_task = st.multiselect(
                     "Filter Subband (Task)",
                     all_sb, default=all_sb,
@@ -467,6 +488,9 @@ def _render_task_section(loader, df, channels, tasks, task_features_df,
         with filter_cols[1]:
             all_ch = sorted(active_feat_df["channel"].unique().tolist()) if "channel" in active_feat_df.columns else []
             if all_ch:
+                c1, c2 = st.columns(2)
+                c1.button("Semua", key="sa_ch_task", on_click=_sel_all, args=("task_channel_filter", all_ch))
+                c2.button("Hapus", key="cl_ch_task", on_click=_clr_all, args=("task_channel_filter",))
                 sel_ch_task = st.multiselect(
                     "Filter Channel (Task)",
                     all_ch, default=all_ch,

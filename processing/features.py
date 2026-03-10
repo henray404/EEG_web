@@ -329,28 +329,38 @@ class EEGFeatures:
                 include_frequency=include_frequency,
             )
 
-        # Ambil hanya occurrence pertama per task
-        first_seen = set()
-        all_rows = []
+        # Ambil hanya occurrence pertama per task yang valid (mempunyai data fitur valid > 4 sampel)
+        # Atau dengan kata lain iterasi seluruh occurrence dari task tersebut sampai dapat yang tidak null
+        task_occ_map = {}
         for occ in occurrences:
-            task_name = occ["task"]
-            if task_name in first_seen or task_name not in tasks:
-                continue
-            first_seen.add(task_name)
+            t = occ["task"]
+            if t not in task_occ_map:
+                task_occ_map[t] = []
+            task_occ_map[t].append(occ["occurrence"])
 
-            seg = loader.extract_occurrence_segment(df, task_name, 1)
-            if seg.empty or len(seg) < 4:
-                continue
-
-            feat_df = EEGFeatures.compute_subband_features(
-                seg, channels, loader.sfreq, subbands, features,
-                include_frequency=include_frequency,
-            )
-            if feat_df.empty:
+        all_rows = []
+        for task_name in tasks:
+            if task_name not in task_occ_map:
                 continue
 
-            feat_df.insert(0, "task", task_name)
-            all_rows.append(feat_df)
+            # Coba tiap occurrence untuk task_name sampai sukses menghitung subset tidak kosong
+            for occ_num in task_occ_map[task_name]:
+                seg = loader.extract_occurrence_segment(df, task_name, occ_num)
+                # Syarat minimal jumlah sampel agar bisa dihitung (4 sampel adalah batas ekstrem absolute min variance)
+                # Idealnya minimal di atas 1 detik (len(seg) > sfreq), tapi komprominya adalah agar tak None
+                if seg.empty or len(seg) < min(100, loader.sfreq * 0.5):
+                    continue
+
+                feat_df = EEGFeatures.compute_subband_features(
+                    seg, channels, loader.sfreq, subbands, features,
+                    include_frequency=include_frequency,
+                )
+                
+                # Jika sukses dihitung dan tidak kosong, simpan dan hentikan loop (sudah dapat representasi pertama task tersebut)
+                if not feat_df.empty:
+                    feat_df.insert(0, "task", task_name)
+                    all_rows.append(feat_df)
+                    break
 
         if all_rows:
             return pd.concat(all_rows, ignore_index=True)

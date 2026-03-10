@@ -28,7 +28,9 @@ from visualization.comparison_plots import ComparisonPlots
 # ---------------------------------------------------------------------------
 
 def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
-                         include_frequency=False):
+                         include_frequency=False,
+                         use_amplitude=False, use_ica=False,
+                         ica_n=None, ica_method="fastica"):
     """Worker: proses satu file EDF dari ZIP bytes (thread-safe)."""
     meta = EEGLoader.detect_category(edf_path)
     loader = EEGLoader()
@@ -45,12 +47,26 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
         loader._cleanup_tmp()
         return None, []
 
+    # Amplitude filter (clipping artefak)
+    if use_amplitude:
+        try:
+            EEGFilters.apply_amplitude_filter(loader)
+        except Exception:
+            pass
+
     try:
         low_all = min(v[0] for v in subbands.values())
         high_all = max(v[1] for v in subbands.values())
         EEGFilters.apply_bandpass(loader, low_all, high_all)
     except Exception:
         pass
+
+    # ICA (hapus artefak otomatis)
+    if use_ica:
+        try:
+            EEGFilters.apply_ica(loader, n_components=ica_n, method=ica_method)
+        except Exception:
+            pass
 
     df = loader.extract_dataframe()
     tasks_found = [t for t in loader.get_task_list() if t != "none"]
@@ -94,6 +110,10 @@ def run_batch_processing(cfg):
     features = cfg["features"] or DEFAULT_FEATURES
     channels = cfg["channels"] if cfg["channels"] else None
     include_freq = cfg.get("include_frequency", False)
+    use_amplitude = cfg.get("use_amplitude", False)
+    use_ica = cfg.get("use_ica", False)
+    ica_n = cfg.get("ica_n", None)
+    ica_method = cfg.get("ica_method", "fastica")
 
     progress_bar = st.progress(0, text="Memulai batch processing...")
 
@@ -117,6 +137,7 @@ def run_batch_processing(cfg):
             executor.submit(
                 _process_single_edf, zip_bytes, path,
                 channels, subbands, features, include_freq,
+                use_amplitude, use_ica, ica_n, ica_method,
             ): path
             for path in edf_list
         }
@@ -581,70 +602,127 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
     if not show_feat_table:
         return
 
-    sel_task_table = st.selectbox("Pilih Task", batch_tasks, key="feat_task_select")
-    sel_feat_table = st.selectbox("Pilih Fitur", feat_cols, key="feat_table_feat")
+    # Tambahkan opsi "Semua Task" dan "Semua Fitur"
+    task_opts = ["Semua Task"] + batch_tasks
+    feat_opts = ["Semua Fitur"] + feat_cols
 
-    task_df = filtered_df[filtered_df["task"] == sel_task_table].copy()
+    sel_task_table = st.selectbox("Pilih Task", task_opts, key="feat_task_select")
+    sel_feat_table = st.selectbox("Pilih Fitur", feat_opts, key="feat_table_feat")
+
+    hide_delta = st.checkbox("Sembunyikan Subband Delta (Tabel Tab Khusus)", value=True, key="hide_delta_chk")
+
+    # Filter berdasarkan Task
+    if sel_task_table == "Semua Task":
+        task_df = filtered_df.copy()
+        sel_task_list = batch_tasks # iterasi semua
+    else:
+        task_df = filtered_df[filtered_df["task"] == sel_task_table].copy()
+        sel_task_list = [sel_task_table]
+
+    if hide_delta and "subband" in task_df.columns:
+        task_df = task_df[task_df["subband"] != "Delta"]
+
     if task_df.empty:
         st.warning(f"Tidak ada data untuk task '{sel_task_table}'.")
         return
 
-    # Pivot: baris = subject, kolom = scenario, group by channel+subband
-    has_scenario = "scenario" in task_df.columns
-    has_subject = "subject" in task_df.columns
-    has_channel = "channel" in task_df.columns
-    has_subband = "subband" in task_df.columns
+    # Filter berdasarkan Fitur
+    if sel_feat_table == "Semua Fitur":
+        sel_feat_list = feat_cols # iterasi semua
+    else:
+        sel_feat_list = [sel_feat_table]
 
-    if not (has_subject and has_channel and has_subband):
-        st.dataframe(task_df, use_container_width=True, hide_index=True)
-        return
+    # Sembunyikan tabel di UI jika opsi "Semua" dipilih agar web tidak perlu scroll panjang
+    if sel_task_table == "Semua Task" or sel_feat_table == "Semua Fitur":
+        st.info("💡 Menampilkan **PREVIEW** (Contoh 1 Task & 1 Fitur pertama) agar antarmuka tidak berat dan scroll terlalu panjang. Seluruh data (semua task/fitur) tetap diekstrak utuh ketika Anda melakukan Download Tabel Excel di bawah.")
+        ui_task_list = sel_task_list[:1]
+        ui_feat_list = sel_feat_list[:1]
+    else:
+        ui_task_list = sel_task_list
+        ui_feat_list = sel_feat_list
 
-    # Subband color mapping
-    subband_colors = {
-        "Mu": "#FFF3E0",
-        "Low_Beta": "#E8F5E9",
-        "High_Beta": "#E3F2FD",
-        "Alpha": "#FCE4EC",
-        "Beta": "#F3E5F5",
-        "Delta": "#FFFDE7",
-        "Theta": "#E0F7FA",
-        "Gamma": "#FBE9E7",
-    }
+    for current_task in ui_task_list:
+        st.markdown(f"### Menganalisis Task: {current_task}")
+        curr_task_df = task_df[task_df["task"] == current_task].copy()
+        
+        if curr_task_df.empty:
+            continue
+            
+        for current_feat in ui_feat_list:
+            st.markdown(f"#### Fitur: {current_feat}")
+            # Cek apakah nilai sangat kecil (perlu konversi ke micro)
+            feat_vals = pd.to_numeric(curr_task_df[current_feat], errors="coerce").dropna()
+            use_micro = False
+            if not feat_vals.empty and 0 < feat_vals.abs().mean() < 1e-3:
+                use_micro = True
+                st.info(f"💡 Nilai sangat kecil dideteksi untuk fitur {current_feat}. Data ditampilkan dalam satuan mikro (µ * 10^6).")
 
-    channels_in_data = sorted(task_df["channel"].unique())
-    subbands_in_data = sorted(task_df["subband"].unique())
+            # Pivot: baris = subject, kolom = scenario, group by channel+subband
+            has_scenario = "scenario" in curr_task_df.columns
+            has_subject = "subject" in curr_task_df.columns
+            has_channel = "channel" in curr_task_df.columns
+            has_subband = "subband" in curr_task_df.columns
 
-    for ch in channels_in_data:
-        st.markdown(f"**Channel: {ch}**")
-        for sb in subbands_in_data:
-            sb_df = task_df[
-                (task_df["channel"] == ch) & (task_df["subband"] == sb)
-            ]
-            if sb_df.empty:
+            if not (has_subject and has_channel and has_subband):
+                if use_micro:
+                    curr_task_df[current_feat] = curr_task_df[current_feat] * 1e6
+                st.dataframe(curr_task_df, use_container_width=True, hide_index=True)
                 continue
 
-            if has_scenario:
-                try:
-                    pivot = sb_df.pivot_table(
-                        index="subject", columns="scenario",
-                        values=sel_feat_table, aggfunc="first",
-                    )
-                    pivot = pivot.reindex(sorted(pivot.columns), axis=1)
-                except Exception:
-                    pivot = sb_df[["subject", sel_feat_table]].set_index("subject")
-            else:
-                pivot = sb_df[["subject", sel_feat_table]].set_index("subject")
+            # Subband color mapping
+            subband_colors = {
+                "Mu": "#FFF3E0", "Low_Beta": "#E8F5E9", "High_Beta": "#E3F2FD",
+                "Alpha": "#FCE4EC", "Beta": "#F3E5F5", "Delta": "#FFFDE7",
+                "Theta": "#E0F7FA", "Gamma": "#FBE9E7",
+            }
 
-            bg_color = subband_colors.get(sb, "#FFFFFF")
-            styled = pivot.style.set_properties(**{"background-color": bg_color})
-            st.markdown(f"*{sb}* — {sel_feat_table}")
-            st.dataframe(styled, use_container_width=True, height=min(35 * (len(pivot) + 1), 400))
+            channels_in_data = sorted(curr_task_df["channel"].unique())
+            subbands_in_data = sorted(curr_task_df["subband"].unique())
 
-        st.markdown("---")
+            for ch in channels_in_data:
+                st.markdown(f"**Channel: {ch}**")
+                for sb in subbands_in_data:
+                    sb_df = curr_task_df[
+                        (curr_task_df["channel"] == ch) & (curr_task_df["subband"] == sb)
+                    ].copy()
+                    if sb_df.empty:
+                        continue
+
+                    if use_micro:
+                        sb_df[current_feat] = sb_df[current_feat] * 1e6
+
+                    if has_scenario:
+                        try:
+                            pivot = sb_df.pivot_table(
+                                index="subject", columns="scenario",
+                                values=current_feat, aggfunc="first",
+                            )
+                            pivot = pivot.reindex(sorted(pivot.columns), axis=1)
+                        except Exception:
+                            pivot = sb_df[["subject", current_feat]].set_index("subject")
+                    else:
+                        pivot = sb_df[["subject", current_feat]].set_index("subject")
+
+                    # Berikan format desimal khusus
+                    disp_feat = f"{current_feat} (µ)" if use_micro else current_feat
+                    bg_color = subband_colors.get(sb, "#FFFFFF")
+                    styled = pivot.style.set_properties(**{"background-color": bg_color}).format("{:.6f}")
+                    
+                    st.markdown(f"*{sb}* — {disp_feat}")
+                    st.dataframe(styled, use_container_width=True, height=min(35 * (len(pivot) + 1), 400))
+                st.markdown("---")
 
     # Download Excel (Custom Layout)
-    import re
-    from openpyxl.styles import PatternFill, Alignment, Font
+    import io
+    from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
+    
+    # Inisialisasi Border
+    thin_border = Border(
+        left=Side(style='thin'), 
+        right=Side(style='thin'), 
+        top=Side(style='thin'), 
+        bottom=Side(style='thin')
+    )
 
     excel_buf = io.BytesIO()
     with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
@@ -654,137 +732,169 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
             categories = ["Semua"]
 
         ch_colors = {
-            0: "FFE699",  # yellow
-            1: "9BC2E6",  # blue
-            2: "C6E0B4",  # green
-            3: "F4B084",  # orange
-            4: "D9D9D9",  # gray
-            5: "B4A7D6",  # purple
+            0: "FFE699", 1: "9BC2E6", 2: "C6E0B4",
+            3: "F4B084", 4: "D9D9D9", 5: "B4A7D6",
         }
 
         for cat in categories:
             if cat == "Semua":
-                df_cat = task_df
+                df_cat = task_df.copy()
             else:
-                df_cat = task_df[task_df["category"] == cat]
-            
+                df_cat = task_df[task_df["category"] == cat].copy()
+
             if df_cat.empty:
                 continue
-
-            safe_feat = re.sub(r'[\\/*?:\[\]]', '', str(sel_feat_table))
-            safe_task = re.sub(r'[\\/*?:\[\]]', '', str(sel_task_table))
-            safe_cat = re.sub(r'[\\/*?:\[\]]', '', str(cat))
-            
-            sheet_name = f"{safe_feat}_{safe_task}_{safe_cat}"[:31]
-            
-            # Buat sheet via pandas dict biar aman
-            pd.DataFrame().to_excel(writer, sheet_name=sheet_name)
-            ws = writer.sheets[sheet_name]
-            
-            # Hapus konten dari cell awal pandas (index & blank)
-            for row in ws.iter_rows():
-                for cell in row:
-                    cell.value = None
-
-            ws.cell(row=1, column=1, value=sel_task_table).font = Font(bold=True)
-            
-            channels_arr = sorted(df_cat["channel"].unique().tolist()) if "channel" in df_cat.columns else []
-            subbands_arr = sorted(df_cat["subband"].unique().tolist()) if "subband" in df_cat.columns else []
-            subjects_arr = sorted(df_cat["subject"].unique().tolist()) if "subject" in df_cat.columns else []
-            
-            has_scen = "scenario" in df_cat.columns
-            scenarios_arr = sorted(df_cat["scenario"].dropna().unique().tolist()) if has_scen else ["Value"]
-            
-            if not subjects_arr or not channels_arr or not subbands_arr:
-                continue
                 
-            # Cek apakai pakai unit micro (µ)
-            feat_vals = pd.to_numeric(df_cat[sel_feat_table], errors="coerce").dropna()
-            use_micro = False
-            if not feat_vals.empty:
-                if 0 < feat_vals.abs().mean() < 1e-3:
-                    use_micro = True
-            disp_feat_name = f"{sel_feat_table} (µ)" if use_micro else sel_feat_table
-            
-            # Mapping nilai
-            val_map = {}
-            for _, r in df_cat.iterrows():
-                val = r.get(sel_feat_table)
-                if pd.isna(val):
+            for current_task in sel_task_list:
+                df_cat_task = df_cat[df_cat["task"] == current_task].copy()
+                if df_cat_task.empty:
                     continue
-                try:
-                    val = float(val)
-                    if use_micro:
-                        val *= 1e6
-                except ValueError:
-                    pass
-                ch = r.get("channel")
-                sb = r.get("subband")
-                subj = r.get("subject")
-                scen = r.get("scenario") if has_scen else "Value"
-                val_map[(ch, sb, subj, scen)] = val
+                    
+                for current_feat in sel_feat_list:
+                    df_cat_task_feat = df_cat_task.copy()
 
-            for c_idx, ch in enumerate(channels_arr):
-                grid_row = c_idx // 2
-                grid_col = c_idx % 2
-                
-                # Menentukan posisi baris dan kolom untuk channel ini
-                start_r = 3 + grid_row * (len(subbands_arr) * (len(subjects_arr) + 3))
-                start_c = 1 + grid_col * (len(scenarios_arr) + 3)
-                
-                ch_color = PatternFill("solid", fgColor=ch_colors.get(c_idx % 6, "FFFFFF"))
-                sb_color = PatternFill("solid", fgColor="F4B084") # orange
-                
-                # Menghitung sampai mana cell channel akan digabung
-                end_r_for_ch = start_r + len(subbands_arr) * (len(subjects_arr) + 3) - 2 
-                
-                c_cell = ws.cell(row=start_r, column=start_c, value=ch)
-                c_cell.alignment = Alignment(horizontal="center", vertical="center", text_rotation=90)
-                c_cell.fill = ch_color
-                c_cell.font = Font(bold=True)
-                if end_r_for_ch > start_r:
-                    ws.merge_cells(start_row=start_r, start_column=start_c, end_row=end_r_for_ch, end_column=start_c)
-                    
-                curr_r = start_r
-                for sb in subbands_arr:
-                    # Header: Subband name
-                    sb_cell = ws.cell(row=curr_r, column=start_c+1, value=sb)
-                    sb_cell.fill = sb_color
-                    sb_cell.font = Font(bold=True)
-                    
-                    # Header: Feature name (spanning scenarios)
-                    f_cell = ws.cell(row=curr_r, column=start_c+2, value=disp_feat_name)
-                    f_cell.font = Font(bold=True)
-                    f_cell.alignment = Alignment(horizontal="center")
-                    if len(scenarios_arr) > 1:
-                        ws.merge_cells(start_row=curr_r, start_column=start_c+2, end_row=curr_r, end_column=start_c+1+len(scenarios_arr))
+                    import re
+                    safe_feat = re.sub(r'[\\/\*\?:\\[\\]]', '', str(current_feat))
+                    safe_task = re.sub(r'[\\/\*\?:\\[\\]]', '', str(current_task))
+                    safe_cat = re.sub(r'[\\/\*\?:\\[\\]]', '', str(cat))
+
+                    sheet_name = f"{safe_feat}_{safe_task}_{safe_cat}"[:31]
+
+                    # Buat sheet via pandas dict biar aman
+                    pd.DataFrame().to_excel(writer, sheet_name=sheet_name)
+                    ws = writer.sheets[sheet_name]
+
+                    # Hapus konten dari cell awal pandas (index & blank)
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            cell.value = None
+
+                    ws.cell(row=1, column=1, value=current_task).font = Font(bold=True)
+
+                    channels_arr = sorted(df_cat_task_feat["channel"].unique().tolist()) if "channel" in df_cat_task_feat.columns else []
+                    subbands_arr = sorted(df_cat_task_feat["subband"].unique().tolist()) if "subband" in df_cat_task_feat.columns else []
+                    subjects_arr = sorted(df_cat_task_feat["subject"].unique().tolist()) if "subject" in df_cat_task_feat.columns else []
+
+                    has_scen = "scenario" in df_cat_task_feat.columns
+                    scenarios_arr = sorted(df_cat_task_feat["scenario"].dropna().unique().tolist()) if has_scen else ["Value"]
+
+                    if not subjects_arr or not channels_arr or not subbands_arr:
+                        continue
+
+                    # Cek apakai pakai unit micro (µ)
+                    feat_vals = pd.to_numeric(df_cat_task_feat[current_feat], errors="coerce").dropna()
+                    use_micro = False
+                    if not feat_vals.empty:
+                        if 0 < feat_vals.abs().mean() < 1e-3:
+                            use_micro = True
+                    disp_feat_name = f"{current_feat} (µ)" if use_micro else current_feat
+
+                    # Mapping nilai
+                    val_map = {}
+                    for _, r in df_cat_task_feat.iterrows():
+                        val = r.get(current_feat)
+                        if pd.isna(val):
+                            continue
+                        try:
+                            val = float(val)
+                            if use_micro:
+                                val *= 1e6
+                        except ValueError:
+                            pass
+                        ch = r.get("channel")
+                        sb = r.get("subband")
+                        subj = r.get("subject")
+                        scen = r.get("scenario") if has_scen else "Value"
+                        val_map[(ch, sb, subj, scen)] = val
+
+                    for c_idx, ch in enumerate(channels_arr):
+                        grid_row = c_idx // 2
+                        grid_col = c_idx % 2
+
+                        # Menentukan posisi baris dan kolom untuk channel ini
+                        # Tiap subband ukurannya: 2 header + len(subjects_arr) data + 2 row jarak = len(subjects_arr) + 4
+                        row_step_per_subband = len(subjects_arr) + 4
+                        start_r = 3 + grid_row * (len(subbands_arr) * row_step_per_subband)
+                        start_c = 1 + grid_col * (len(scenarios_arr) + 3)
+
+                        ch_color = PatternFill("solid", fgColor=ch_colors.get(c_idx % 6, "FFFFFF"))
+                        sb_color = PatternFill("solid", fgColor="F4B084") # orange
+
+                        # Menghitung sampai mana cell channel akan digabung (batas akhir adalah isi data subjekt terakhir)
+                        end_r_for_ch = start_r + len(subbands_arr) * row_step_per_subband - 3
+
+                        c_cell = ws.cell(row=start_r, column=start_c, value=ch)
+                        c_cell.alignment = Alignment(horizontal="center", vertical="center", text_rotation=90)
+                        c_cell.fill = ch_color
+                        c_cell.font = Font(bold=True)
+                        c_cell.border = thin_border
                         
-                    curr_r += 1
-                    # Header: "ID" and scenarios names
-                    ws.cell(row=curr_r, column=start_c+1, value="ID").font = Font(bold=True)
-                    for s_idx, scen in enumerate(scenarios_arr):
-                        sc_cell = ws.cell(row=curr_r, column=start_c+2+s_idx, value=scen)
-                        sc_cell.font = Font(bold=True)
-                        sc_cell.alignment = Alignment(horizontal="center")
-                        
-                    # Data Row (Subjects and Values)
-                    for subj in subjects_arr:
-                        curr_r += 1
-                        ws.cell(row=curr_r, column=start_c+1, value=subj)
-                        for s_idx, scen in enumerate(scenarios_arr):
-                            v = val_map.get((ch, sb, subj, scen), "")
-                            cell = ws.cell(row=curr_r, column=start_c+2+s_idx, value=v)
-                            if isinstance(v, float):
-                                cell.number_format = '0.0000'
+                        if end_r_for_ch > start_r:
+                            ws.merge_cells(start_row=start_r, start_column=start_c, end_row=end_r_for_ch, end_column=start_c)
+                            # Set border untuk cell yang dimerge
+                            for row in ws.iter_rows(min_row=start_r, max_row=end_r_for_ch, min_col=start_c, max_col=start_c):
+                                for cell in row:
+                                    cell.border = thin_border
+
+                        curr_r = start_r
+                        for sb in subbands_arr:
+                            # Header: Subband name
+                            sb_cell = ws.cell(row=curr_r, column=start_c+1, value=sb)
+                            sb_cell.fill = sb_color
+                            sb_cell.font = Font(bold=True)
+                            sb_cell.border = thin_border
+
+                            # Header: Feature name (spanning scenarios)
+                            f_cell = ws.cell(row=curr_r, column=start_c+2, value=disp_feat_name)
+                            f_cell.font = Font(bold=True)
+                            f_cell.alignment = Alignment(horizontal="center")
+                            f_cell.border = thin_border
+                            
+                            if len(scenarios_arr) > 1:
+                                ws.merge_cells(start_row=curr_r, start_column=start_c+2, end_row=curr_r, end_column=start_c+1+len(scenarios_arr))
+                                # Set border untuk cell yang dimerge
+                                for row in ws.iter_rows(min_row=curr_r, max_row=curr_r, min_col=start_c+2, max_col=start_c+1+len(scenarios_arr)):
+                                    for cell in row:
+                                        cell.border = thin_border
+
+                            curr_r += 1
+                            # Header: "ID" and scenarios names
+                            id_cell = ws.cell(row=curr_r, column=start_c+1, value="ID")
+                            id_cell.font = Font(bold=True)
+                            id_cell.border = thin_border
+                            
+                            for s_idx, scen in enumerate(scenarios_arr):
+                                sc_cell = ws.cell(row=curr_r, column=start_c+2+s_idx, value=scen)
+                                sc_cell.font = Font(bold=True)
+                                sc_cell.alignment = Alignment(horizontal="center")
+                                sc_cell.border = thin_border
+                            
+                            curr_r += 1
+                            # Data rows
+                            for subj in subjects_arr:
+                                # Row header: Subject ID
+                                subj_cell = ws.cell(row=curr_r, column=start_c+1, value=subj)
+                                subj_cell.border = thin_border
                                 
-                    curr_r += 2 # Menambah 1 row kosong stl data sbg jarak ke subband berikutnya
-                    
+                                # Data values per scenario
+                                for s_idx, scen in enumerate(scenarios_arr):
+                                    v = val_map.get((ch, sb, subj, scen))
+                                    v_cell = ws.cell(row=curr_r, column=start_c+2+s_idx, value=v)
+                                    v_cell.border = thin_border
+                                curr_r += 1
+
+                            # Spacer before next subband
+                            curr_r += 2
+
     st.download_button(
-        "Download Excel (Fitur per Task - Grid Format)", excel_buf.getvalue(),
-        file_name=f"fitur_{sel_task_table}_{sel_feat_table}_grid.xlsx",
+        label="📥 Download Tabel Excel (Grid Custom + Multiple Fitur/Task)",
+        data=excel_buf.getvalue(),
+        file_name="batch_features_grid_all.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="dl_feat_task_xlsx_grid",
+        key="btn_dl_feat_all"
     )
+
+
 
 
 # ---------------------------------------------------------------------------
