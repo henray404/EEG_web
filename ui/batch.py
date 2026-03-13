@@ -95,8 +95,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
         for task_name in non_resting_tasks:
             erd_one = EEGFeatures.compute_erd_ers_paired(
                 loader, df, ch_list, task_name,
-                subbands=subbands, features=features,
-                include_frequency=include_frequency,
+                subbands=subbands,
                 baseline_task="Resting",
             )
             if not erd_one.empty:
@@ -981,41 +980,34 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
         st.warning("Tidak ada data ERD/ERS setelah filter diterapkan.")
         return
 
-    # Identifikasi kolom ERD/ERS percentage
-    erd_pct_cols = [c for c in erd_df.columns if c.endswith("_erd_ers_pct")]
-
-    # Pilih fitur untuk ditampilkan
-    available_feats = [c.replace("_erd_ers_pct", "") for c in erd_pct_cols]
-    if not available_feats:
-        st.warning("Tidak ada kolom ERD/ERS yang tersedia.")
+    # --- Pemilihan Baseline & Task ---
+    available_tasks = sorted(erd_df["task"].unique().tolist()) if "task" in erd_df.columns else []
+    if not available_tasks:
+        st.warning("Tidak ada task ERD/ERS yang tersedia.")
         return
 
-    sel_erd_feat = st.selectbox("Fitur untuk ERD/ERS", available_feats, key="erd_feat_sel")
+    col_bl, col_tk = st.columns(2)
+    with col_bl:
+        st.markdown("**Baseline**")
+        st.info("Resting (otomatis)")
+    with col_tk:
+        sel_task = st.selectbox("Task (kondisi)", available_tasks, key="erd_task_sel")
 
-    # Kolom yang relevan untuk fitur terpilih
-    pct_col = f"{sel_erd_feat}_erd_ers_pct"
-    baseline_col = f"{sel_erd_feat}_baseline"
-    task_col = f"{sel_erd_feat}_task"
+    # Filter berdasarkan task yang dipilih
+    erd_df = erd_df[erd_df["task"] == sel_task].copy()
+    if erd_df.empty:
+        st.warning(f"Tidak ada data ERD/ERS untuk task '{sel_task}'.")
+        return
 
-    # Susun tabel tampilan
+    # Susun tabel tampilan — kolom sudah fixed: baseline_power, task_power, erd_ers_pct
     meta_display = ["filename", "category", "subject", "time", "scenario", "task",
                     "channel", "subband"]
     display_cols = [c for c in meta_display if c in erd_df.columns]
-    for c in [baseline_col, task_col, pct_col]:
+    for c in ["baseline_power", "task_power", "erd_ers_pct"]:
         if c in erd_df.columns:
             display_cols.append(c)
 
     out_erd = erd_df[display_cols].copy()
-
-    # Rename untuk kejelasan
-    rename_map = {}
-    if baseline_col in out_erd.columns:
-        rename_map[baseline_col] = "baseline_value"
-    if task_col in out_erd.columns:
-        rename_map[task_col] = "task_value"
-    if pct_col in out_erd.columns:
-        rename_map[pct_col] = "erd_ers_pct"
-    out_erd.rename(columns=rename_map, inplace=True)
 
     # Warna: negatif = merah (ERD), positif = hijau (ERS)
     def _color_erd(val):
@@ -1035,7 +1027,7 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
         csv_erd = out_erd.to_csv(index=False).encode("utf-8")
         st.download_button(
             "Download CSV (ERD/ERS)", csv_erd,
-            file_name=f"erd_ers_{sel_erd_feat}.csv",
+            file_name="erd_ers_band_power.csv",
             mime="text/csv", key="dl_erd_csv",
         )
     with fl2:
@@ -1045,7 +1037,8 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
             out_excel.to_excel(writer, index=False, sheet_name="ERD_ERS")
         st.download_button(
             "Download Excel (ERD/ERS)", excel_erd.getvalue(),
-            file_name=f"erd_ers_{sel_erd_feat}.xlsx",
+            file_name="erd_ers_band_power.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="dl_erd_xlsx",
         )
+
