@@ -31,7 +31,15 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
                          include_frequency=False,
                          use_amplitude=False, use_ica=False,
                          ica_n=None, ica_method="fastica"):
-    """Worker: proses satu file EDF dari ZIP bytes (thread-safe)."""
+    """Worker: proses satu file EDF dari ZIP bytes (thread-safe).
+
+    Returns
+    -------
+    tuple  (feat_df, tasks_found, erd_df)
+           feat_df   : fitur per task/channel/subband (atau None)
+           tasks_found : list nama task
+           erd_df    : DataFrame ERD/ERS paired per task (atau None)
+    """
     meta = EEGLoader.detect_category(edf_path)
     loader = EEGLoader()
 
@@ -39,13 +47,13 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
         buf = io.BytesIO(zip_bytes)
         loader.load_edf_from_zip(buf, edf_path)
     except Exception:
-        return None, []
+        return None, [], None
 
     ch_list = channels if channels else loader.channel_names
     ch_list = [c for c in ch_list if c in loader.channel_names]
     if not ch_list:
         loader._cleanup_tmp()
-        return None, []
+        return None, [], None
 
     # Amplitude filter (clipping artefak)
     if use_amplitude:
@@ -73,16 +81,41 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
 
     if not tasks_found:
         loader._cleanup_tmp()
-        return None, tasks_found
+        return None, tasks_found, None
 
     feat_df = EEGFeatures.compute_first_occurrence_features(
         loader, df, ch_list, tasks_found, subbands, features,
         include_frequency=include_frequency,
     )
+
+    # --- Hitung ERD/ERS paired (Resting → Task) per non-Resting task ---
+    erd_parts = []
+    non_resting_tasks = [t for t in tasks_found if t != "Resting"]
+    if "Resting" in tasks_found and non_resting_tasks:
+        for task_name in non_resting_tasks:
+            erd_one = EEGFeatures.compute_erd_ers_paired(
+                loader, df, ch_list, task_name,
+                subbands=subbands, features=features,
+                include_frequency=include_frequency,
+                baseline_task="Resting",
+            )
+            if not erd_one.empty:
+                erd_parts.append(erd_one)
+
     loader._cleanup_tmp()
 
+    # Gabungkan ERD/ERS dari semua task
+    erd_df = None
+    if erd_parts:
+        erd_df = pd.concat(erd_parts, ignore_index=True)
+        erd_df.insert(0, "filename", edf_path)
+        erd_df.insert(1, "category", meta["category"])
+        erd_df.insert(2, "subject", meta["subject"])
+        erd_df.insert(3, "time", meta["time"])
+        erd_df.insert(4, "scenario", meta["scenario"])
+
     if feat_df.empty:
-        return None, tasks_found
+        return None, tasks_found, erd_df
 
     feat_df.insert(0, "filename", edf_path)
     feat_df.insert(1, "category", meta["category"])
@@ -90,7 +123,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
     feat_df.insert(3, "time", meta["time"])
     feat_df.insert(4, "scenario", meta["scenario"])
 
-    return feat_df, tasks_found
+    return feat_df, tasks_found, erd_df
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +160,7 @@ def run_batch_processing(cfg):
         return
 
     all_dfs = []
+    all_erd_dfs = []
     common_tasks = set()
     n_total = len(edf_list)
 
@@ -149,13 +183,15 @@ def run_batch_processing(cfg):
                 text=f"Memproses {i}/{n_total}: {path.split('/')[-1]}",
             )
             try:
-                feat_df, tasks_found = future.result()
+                feat_df, tasks_found, erd_df = future.result()
                 if feat_df is not None and not feat_df.empty:
                     all_dfs.append(feat_df)
                     if not common_tasks:
                         common_tasks = set(tasks_found)
                     else:
                         common_tasks |= set(tasks_found)
+                if erd_df is not None and not erd_df.empty:
+                    all_erd_dfs.append(erd_df)
             except Exception:
                 pass
 
@@ -169,7 +205,13 @@ def run_batch_processing(cfg):
     if common_tasks is None:
         common_tasks = set()
 
+    # Simpan ERD/ERS paired results
+    batch_erd_df = pd.DataFrame()
+    if all_erd_dfs:
+        batch_erd_df = pd.concat(all_erd_dfs, ignore_index=True)
+
     st.session_state.batch_df = batch_df
+    st.session_state.batch_erd_df = batch_erd_df
     st.session_state.batch_tasks = sorted(common_tasks)
     st.session_state.batch_processed = True
     st.success(
@@ -902,13 +944,14 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
 # ---------------------------------------------------------------------------
 
 def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
-    """Render analisis ERD/ERS."""
+    """Render analisis ERD/ERS (paired: Resting → Task)."""
     if "Resting" not in batch_tasks or len(batch_tasks) < 2:
         return
 
-    st.markdown('<p class="section-title">ERD/ERS Analysis</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-title">ERD/ERS Analysis (Paired Baseline)</p>', unsafe_allow_html=True)
     st.caption(
         "Event-Related Desynchronization (ERD) / Synchronization (ERS). "
+        "Baseline = Resting yang muncul tepat sebelum Task. "
         "Negatif = ERD (penurunan power), Positif = ERS (kenaikan power)."
     )
 
@@ -916,15 +959,63 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
     if not show_erd:
         return
 
-    sel_erd_feat = st.selectbox("Fitur untuk ERD/ERS", feat_cols, key="erd_feat_sel")
+    # Ambil pre-computed ERD/ERS paired dari session state
+    erd_df = st.session_state.get("batch_erd_df", pd.DataFrame())
 
-    erd_df = EEGFeatures.compute_erd_ers(
-        filtered_df, baseline_task="Resting", feature_col=sel_erd_feat,
-    )
+    if erd_df is None or erd_df.empty:
+        st.warning("Tidak ada data ERD/ERS (pastikan ada pasangan Resting → Task dalam annotations).")
+        return
+
+    # Terapkan filter yang sama dari filtered_df
+    if "filename" in filtered_df.columns and "filename" in erd_df.columns:
+        valid_files = filtered_df["filename"].unique()
+        erd_df = erd_df[erd_df["filename"].isin(valid_files)].copy()
+    if "channel" in filtered_df.columns and "channel" in erd_df.columns:
+        valid_channels = filtered_df["channel"].unique()
+        erd_df = erd_df[erd_df["channel"].isin(valid_channels)].copy()
+    if "subband" in filtered_df.columns and "subband" in erd_df.columns:
+        valid_subbands = filtered_df["subband"].unique()
+        erd_df = erd_df[erd_df["subband"].isin(valid_subbands)].copy()
 
     if erd_df.empty:
-        st.warning("Tidak ada data ERD/ERS (pastikan task Resting ada).")
+        st.warning("Tidak ada data ERD/ERS setelah filter diterapkan.")
         return
+
+    # Identifikasi kolom ERD/ERS percentage
+    erd_pct_cols = [c for c in erd_df.columns if c.endswith("_erd_ers_pct")]
+
+    # Pilih fitur untuk ditampilkan
+    available_feats = [c.replace("_erd_ers_pct", "") for c in erd_pct_cols]
+    if not available_feats:
+        st.warning("Tidak ada kolom ERD/ERS yang tersedia.")
+        return
+
+    sel_erd_feat = st.selectbox("Fitur untuk ERD/ERS", available_feats, key="erd_feat_sel")
+
+    # Kolom yang relevan untuk fitur terpilih
+    pct_col = f"{sel_erd_feat}_erd_ers_pct"
+    baseline_col = f"{sel_erd_feat}_baseline"
+    task_col = f"{sel_erd_feat}_task"
+
+    # Susun tabel tampilan
+    meta_display = ["filename", "category", "subject", "time", "scenario", "task",
+                    "channel", "subband"]
+    display_cols = [c for c in meta_display if c in erd_df.columns]
+    for c in [baseline_col, task_col, pct_col]:
+        if c in erd_df.columns:
+            display_cols.append(c)
+
+    out_erd = erd_df[display_cols].copy()
+
+    # Rename untuk kejelasan
+    rename_map = {}
+    if baseline_col in out_erd.columns:
+        rename_map[baseline_col] = "baseline_value"
+    if task_col in out_erd.columns:
+        rename_map[task_col] = "task_value"
+    if pct_col in out_erd.columns:
+        rename_map[pct_col] = "erd_ers_pct"
+    out_erd.rename(columns=rename_map, inplace=True)
 
     # Warna: negatif = merah (ERD), positif = hijau (ERS)
     def _color_erd(val):
@@ -935,13 +1026,13 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
                 return "background-color: #C8E6C9"  # hijau muda
         return ""
 
-    styled_erd = erd_df.style.map(_color_erd, subset=["erd_ers_pct"])
+    styled_erd = out_erd.style.map(_color_erd, subset=["erd_ers_pct"])
     st.dataframe(styled_erd, use_container_width=True, height=400, hide_index=True)
 
     # Download
     fl1, fl2 = st.columns(2)
     with fl1:
-        csv_erd = erd_df.to_csv(index=False).encode("utf-8")
+        csv_erd = out_erd.to_csv(index=False).encode("utf-8")
         st.download_button(
             "Download CSV (ERD/ERS)", csv_erd,
             file_name=f"erd_ers_{sel_erd_feat}.csv",
@@ -950,8 +1041,8 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
     with fl2:
         excel_erd = io.BytesIO()
         with pd.ExcelWriter(excel_erd, engine="openpyxl") as writer:
-            out_erd = _format_micro_units(erd_df)
-            out_erd.to_excel(writer, index=False, sheet_name="ERD_ERS")
+            out_excel = _format_micro_units(out_erd)
+            out_excel.to_excel(writer, index=False, sheet_name="ERD_ERS")
         st.download_button(
             "Download Excel (ERD/ERS)", excel_erd.getvalue(),
             file_name=f"erd_ers_{sel_erd_feat}.xlsx",

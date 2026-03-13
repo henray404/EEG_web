@@ -432,6 +432,129 @@ class EEGFeatures:
         return result
 
     @staticmethod
+    def compute_erd_ers_paired(loader, df, channels, task_name,
+                                subbands=None, features=None,
+                                include_frequency=True,
+                                baseline_task="Resting"):
+        """Hitung ERD/ERS menggunakan pasangan Resting→Task yang berurutan.
+
+        Mencari occurrence Resting yang langsung diikuti oleh task_name
+        dalam urutan temporal annotations.  Hanya menggunakan pasangan
+        pertama yang valid (1 Resting + 1 Task).
+
+        ERD/ERS = ((Power_Task - Power_Baseline) / Power_Baseline) × 100%
+
+        Parameters
+        ----------
+        loader : EEGLoader
+            Loader instance (sudah load file EDF).
+        df : pd.DataFrame
+            DataFrame sinyal (kolom per channel + time + marker).
+        channels : list[str]
+            Nama channel yang akan dihitung.
+        task_name : str
+            Nama task target (misal 'Thinking').
+        subbands : dict | None
+            Subband definitions.
+        features : list[str] | None
+            Fitur time-domain.
+        include_frequency : bool
+            Hitung juga fitur frequency-domain.
+        baseline_task : str
+            Nama task baseline (default: 'Resting').
+
+        Returns
+        -------
+        pd.DataFrame  Kolom: task, channel, subband, baseline_value, task_value,
+                       erd_ers_pct, + semua fitur baseline & task.
+                       Kosong jika tidak ditemukan pasangan valid.
+        """
+        if subbands is None:
+            subbands = DEFAULT_SUBBANDS
+        if features is None:
+            features = DEFAULT_FEATURES
+
+        occurrences = loader.get_task_occurrences()
+        if not occurrences:
+            return pd.DataFrame()
+
+        # Cari pasangan baseline_task → task_name yang berurutan
+        pair = None
+        for i in range(len(occurrences) - 1):
+            curr = occurrences[i]
+            nxt = occurrences[i + 1]
+            if curr["task"] == baseline_task and nxt["task"] == task_name:
+                pair = (curr["occurrence"], nxt["occurrence"])
+                break
+
+        if pair is None:
+            return pd.DataFrame()
+
+        baseline_occ, task_occ = pair
+
+        # Ekstrak segment untuk baseline dan task
+        seg_baseline = loader.extract_occurrence_segment(
+            df, baseline_task, baseline_occ
+        )
+        seg_task = loader.extract_occurrence_segment(
+            df, task_name, task_occ
+        )
+
+        if seg_baseline.empty or seg_task.empty:
+            return pd.DataFrame()
+        if len(seg_baseline) < 4 or len(seg_task) < 4:
+            return pd.DataFrame()
+
+        # Hitung fitur untuk kedua segment
+        feat_baseline = EEGFeatures.compute_subband_features(
+            seg_baseline, channels, loader.sfreq, subbands, features,
+            include_frequency=include_frequency,
+        )
+        feat_task = EEGFeatures.compute_subband_features(
+            seg_task, channels, loader.sfreq, subbands, features,
+            include_frequency=include_frequency,
+        )
+
+        if feat_baseline.empty or feat_task.empty:
+            return pd.DataFrame()
+
+        # Merge baseline dan task pada (channel, subband)
+        merge_keys = ["channel", "subband"]
+        merged = pd.merge(
+            feat_task, feat_baseline,
+            on=merge_keys, suffixes=("_task", "_baseline"),
+        )
+
+        if merged.empty:
+            return pd.DataFrame()
+
+        # Identifikasi kolom fitur (semua kolom kecuali merge keys)
+        meta_set = set(merge_keys)
+        feat_col_names = [
+            c.replace("_task", "")
+            for c in merged.columns
+            if c.endswith("_task") and c.replace("_task", "") not in meta_set
+        ]
+
+        # Buat result DataFrame
+        result = merged[merge_keys].copy()
+        result.insert(0, "task", task_name)
+
+        for fc in feat_col_names:
+            col_t = f"{fc}_task"
+            col_b = f"{fc}_baseline"
+            if col_t in merged.columns and col_b in merged.columns:
+                result[f"{fc}_baseline"] = merged[col_b]
+                result[f"{fc}_task"] = merged[col_t]
+                result[f"{fc}_erd_ers_pct"] = np.where(
+                    merged[col_b] != 0,
+                    ((merged[col_t] - merged[col_b]) / merged[col_b]) * 100.0,
+                    0.0,
+                )
+
+        return result
+
+    @staticmethod
     def compute_band_ratios(features_df, ratios=None):
         """Hitung rasio power antar subband.
 
