@@ -99,7 +99,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
 
 def run_batch_processing(cfg):
     """Jalankan batch analysis: baca semua EDF dari ZIP, hitung fitur."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
     uploaded = cfg.get("uploaded")
     if uploaded is None:
@@ -130,9 +130,19 @@ def run_batch_processing(cfg):
     common_tasks = set()
     n_total = len(edf_list)
 
-    max_workers = min(4, max(1, os.cpu_count() or 1))
+    cpu_count = max(1, os.cpu_count() or 1)
+    max_workers = min(cpu_count, n_total)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # ProcessPoolExecutor untuk CPU-bound (MNE/NumPy melewati GIL).
+    # Fallback ke ThreadPoolExecutor jika spawn gagal (misalnya di environment terbatas).
+    PoolExecutor = ProcessPoolExecutor
+    try:
+        with ProcessPoolExecutor(max_workers=1) as _test:
+            _test.submit(int, 0).result()
+    except Exception:
+        PoolExecutor = ThreadPoolExecutor
+
+    with PoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 _process_single_edf, zip_bytes, path,
@@ -679,6 +689,13 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
             channels_in_data = sorted(curr_task_df["channel"].unique())
             subbands_in_data = sorted(curr_task_df["subband"].unique())
 
+            # Tambahkan kolom subject_time agar bisa dibedakan per time
+            has_time = "time" in curr_task_df.columns
+            if has_time:
+                curr_task_df["subject_time"] = curr_task_df["subject"] + " (" + curr_task_df["time"].astype(str) + ")"
+            else:
+                curr_task_df["subject_time"] = curr_task_df["subject"]
+
             for ch in channels_in_data:
                 st.markdown(f"**Channel: {ch}**")
                 for sb in subbands_in_data:
@@ -691,17 +708,19 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
                     if use_micro:
                         sb_df[current_feat] = sb_df[current_feat] * 1e6
 
+                    pivot_index = "subject_time"
                     if has_scenario:
                         try:
                             pivot = sb_df.pivot_table(
-                                index="subject", columns="scenario",
+                                index=pivot_index, columns="scenario",
                                 values=current_feat, aggfunc="first",
                             )
                             pivot = pivot.reindex(sorted(pivot.columns), axis=1)
                         except Exception:
-                            pivot = sb_df[["subject", current_feat]].set_index("subject")
+                            pivot = sb_df[[pivot_index, current_feat]].set_index(pivot_index)
                     else:
-                        pivot = sb_df[["subject", current_feat]].set_index("subject")
+                        pivot = sb_df[[pivot_index, current_feat]].set_index(pivot_index)
+                    pivot.index.name = "subject"
 
                     # Berikan format desimal khusus
                     disp_feat = f"{current_feat} (µ)" if use_micro else current_feat
@@ -773,7 +792,13 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
 
                     channels_arr = sorted(df_cat_task_feat["channel"].unique().tolist()) if "channel" in df_cat_task_feat.columns else []
                     subbands_arr = sorted(df_cat_task_feat["subband"].unique().tolist()) if "subband" in df_cat_task_feat.columns else []
-                    subjects_arr = sorted(df_cat_task_feat["subject"].unique().tolist()) if "subject" in df_cat_task_feat.columns else []
+                    # Gabungkan subject+time agar Excel juga menampilkan info time
+                    has_time_col = "time" in df_cat_task_feat.columns
+                    if has_time_col:
+                        df_cat_task_feat["subject_time"] = df_cat_task_feat["subject"] + " (" + df_cat_task_feat["time"].astype(str) + ")"
+                    else:
+                        df_cat_task_feat["subject_time"] = df_cat_task_feat["subject"]
+                    subjects_arr = sorted(df_cat_task_feat["subject_time"].unique().tolist()) if "subject_time" in df_cat_task_feat.columns else []
 
                     has_scen = "scenario" in df_cat_task_feat.columns
                     scenarios_arr = sorted(df_cat_task_feat["scenario"].dropna().unique().tolist()) if has_scen else ["Value"]
@@ -803,7 +828,7 @@ def _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols):
                             pass
                         ch = r.get("channel")
                         sb = r.get("subband")
-                        subj = r.get("subject")
+                        subj = r.get("subject_time")
                         scen = r.get("scenario") if has_scen else "Value"
                         val_map[(ch, sb, subj, scen)] = val
 
