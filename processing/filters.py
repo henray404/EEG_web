@@ -229,3 +229,23 @@ class EEGFilters:
             f"ICA (metode={method}, komponen={ica.n_components_}, "
             f"artefak={n_excluded})"
         )
+
+    # ------------------------------------------------------------------ #
+    #  Common Average Reference (CAR)                                     #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def apply_car(loader):
+        """Common Average Reference: re-referencing ke rata-rata semua channel.
+
+        Parameters
+        ----------
+        loader : EEGLoader
+            Loader instance dengan raw data.
+        """
+        if loader.raw is None:
+            raise RuntimeError("Data belum dimuat.")
+
+        loader.raw.set_eeg_reference("average", projection=False, verbose=False)
+        loader.processing_log.append("Common Average Reference (CAR) diterapkan")
+

@@ -13,6 +13,7 @@ import pandas as pd
 from scipy.signal import butter, filtfilt
 
 from config import DEFAULT_SUBBANDS, DEFAULT_FEATURES, BAND_RATIOS
+from processing.psd import PSDAnalyzer
 
 
 def _bandpass_array(data, sfreq, low, high, order=5):
@@ -113,7 +114,9 @@ class EEGFeatures:
 
     @staticmethod
     def compute_subband_features(df, channels, sfreq, subbands=None,
-                                  features=None, include_frequency=True):
+                                  features=None, include_frequency=True,
+                                  psd_method="welch", psd_fmin=0.0,
+                                  psd_fmax=49.0, psd_n_fft=None):
         """Hitung fitur per channel per subband.
 
         Parameters
@@ -129,7 +132,14 @@ class EEGFeatures:
         features : list[str] | None
             Fitur time-domain: ["mav", "variance", "std", "rms"].
         include_frequency : bool
-            Jika True, hitung juga band_power, relative_power, peak_frequency.
+            Jika True, hitung band_power, relative_power, peak_frequency
+            menggunakan PSD (Welch/Multitaper).
+        psd_method : str
+            Metode PSD: 'welch' atau 'multitaper'.
+        psd_fmin, psd_fmax : float
+            Rentang frekuensi PSD.
+        psd_n_fft : int | None
+            Panjang FFT untuk PSD. None = auto.
 
         Returns
         -------
@@ -139,6 +149,26 @@ class EEGFeatures:
             subbands = DEFAULT_SUBBANDS
         if features is None:
             features = DEFAULT_FEATURES
+
+        # --- Pre-compute PSD-based band power jika include_frequency ---
+        psd_bp_map = {}  # (channel, subband) -> {band_power, relative_power, peak_frequency}
+        if include_frequency:
+            ch_list = [ch for ch in channels if ch in df.columns]
+            if ch_list and len(df) >= 8:
+                data = df[ch_list].values.T  # (n_channels, n_samples)
+                psds, freqs = PSDAnalyzer.compute_psd_array(
+                    data, sfreq, method=psd_method,
+                    fmin=psd_fmin, fmax=psd_fmax, n_fft=psd_n_fft,
+                )
+                bp_df = PSDAnalyzer.compute_band_power_from_psd(
+                    psds, freqs, ch_list, subbands,
+                )
+                for _, row in bp_df.iterrows():
+                    psd_bp_map[(row["channel"], row["subband"])] = {
+                        "band_power": row["band_power"],
+                        "relative_power": row["relative_power"],
+                        "peak_frequency": row["peak_frequency"],
+                    }
 
         rows = []
 
@@ -160,17 +190,12 @@ class EEGFeatures:
                     elif feat == "std":
                         row[feat] = float(np.std(filtered))
 
-                # --- Frequency-domain features (BARU) ---
+                # --- Frequency-domain features via PSD ---
                 if include_frequency:
-                    row["band_power"] = EEGFeatures.compute_band_power(
-                        signal, sfreq, low, high
-                    )
-                    row["relative_power"] = EEGFeatures.compute_relative_power(
-                        signal, sfreq, low, high
-                    )
-                    row["peak_frequency"] = EEGFeatures.compute_peak_frequency(
-                        signal, sfreq, low, high
-                    )
+                    bp = psd_bp_map.get((ch, sb_name), {})
+                    row["band_power"] = bp.get("band_power", 0.0)
+                    row["relative_power"] = bp.get("relative_power", 0.0)
+                    row["peak_frequency"] = bp.get("peak_frequency", 0.0)
 
                 rows.append(row)
 
@@ -182,7 +207,9 @@ class EEGFeatures:
 
     @staticmethod
     def compute_task_features(loader, df, channels, tasks, subbands=None,
-                               features=None, include_frequency=True):
+                               features=None, include_frequency=True,
+                               psd_method="welch", psd_fmin=0.0,
+                               psd_fmax=49.0, psd_n_fft=None):
         """Hitung fitur per task per channel per subband.
 
         Parameters
@@ -194,6 +221,7 @@ class EEGFeatures:
         tasks : list[str]
         subbands, features : lihat compute_subband_features.
         include_frequency : bool
+        psd_method, psd_fmin, psd_fmax, psd_n_fft : parameter PSD.
 
         Returns
         -------
@@ -207,6 +235,8 @@ class EEGFeatures:
             feat_df = EEGFeatures.compute_subband_features(
                 seg, channels, loader.sfreq, subbands, features,
                 include_frequency=include_frequency,
+                psd_method=psd_method, psd_fmin=psd_fmin,
+                psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
             )
             feat_df.insert(0, "task", task)
             all_rows.append(feat_df)
@@ -222,7 +252,9 @@ class EEGFeatures:
     @staticmethod
     def compute_occurrence_features(loader, df, channels, tasks,
                                      subbands=None, features=None,
-                                     include_frequency=True):
+                                     include_frequency=True,
+                                     psd_method="welch", psd_fmin=0.0,
+                                     psd_fmax=49.0, psd_n_fft=None):
         """Hitung fitur per occurrence per task per channel per subband.
 
         Setiap occurrence diberi label task_occ (misal 'Resting_1').
@@ -232,6 +264,7 @@ class EEGFeatures:
         loader : EEGLoader
         df : pd.DataFrame
         channels, tasks, subbands, features, include_frequency: sama.
+        psd_method, psd_fmin, psd_fmax, psd_n_fft : parameter PSD.
 
         Returns
         -------
@@ -256,6 +289,8 @@ class EEGFeatures:
             feat_df = EEGFeatures.compute_subband_features(
                 seg, channels, loader.sfreq, subbands, features,
                 include_frequency=include_frequency,
+                psd_method=psd_method, psd_fmin=psd_fmin,
+                psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
             )
             if feat_df.empty:
                 continue
@@ -272,7 +307,10 @@ class EEGFeatures:
     @staticmethod
     def compute_aggregated_occurrence_features(loader, df, channels, tasks,
                                                 subbands=None, features=None,
-                                                include_frequency=True):
+                                                include_frequency=True,
+                                                psd_method="welch",
+                                                psd_fmin=0.0, psd_fmax=49.0,
+                                                psd_n_fft=None):
         """Hitung fitur dengan rata-rata semua occurrence per task.
 
         Untuk setiap task: hitung fitur per occurrence dulu, lalu
@@ -286,6 +324,8 @@ class EEGFeatures:
         occ_df = EEGFeatures.compute_occurrence_features(
             loader, df, channels, tasks, subbands, features,
             include_frequency=include_frequency,
+            psd_method=psd_method, psd_fmin=psd_fmin,
+            psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
         )
         if occ_df.empty:
             return pd.DataFrame()
@@ -305,7 +345,9 @@ class EEGFeatures:
     @staticmethod
     def compute_first_occurrence_features(loader, df, channels, tasks,
                                           subbands=None, features=None,
-                                          include_frequency=True):
+                                          include_frequency=True,
+                                          psd_method="welch", psd_fmin=0.0,
+                                          psd_fmax=49.0, psd_n_fft=None):
         """Hitung fitur hanya dari occurrence pertama tiap task.
 
         Occurrence pertama dianggap lebih 'murni' karena subjek belum
@@ -316,6 +358,7 @@ class EEGFeatures:
         loader : EEGLoader
         df : pd.DataFrame
         channels, tasks, subbands, features, include_frequency: sama.
+        psd_method, psd_fmin, psd_fmax, psd_n_fft : parameter PSD.
 
         Returns
         -------
@@ -327,10 +370,11 @@ class EEGFeatures:
             return EEGFeatures.compute_task_features(
                 loader, df, channels, tasks, subbands, features,
                 include_frequency=include_frequency,
+                psd_method=psd_method, psd_fmin=psd_fmin,
+                psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
             )
 
-        # Ambil hanya occurrence pertama per task yang valid (mempunyai data fitur valid > 4 sampel)
-        # Atau dengan kata lain iterasi seluruh occurrence dari task tersebut sampai dapat yang tidak null
+        # Ambil hanya occurrence pertama per task yang valid
         task_occ_map = {}
         for occ in occurrences:
             t = occ["task"]
@@ -343,20 +387,18 @@ class EEGFeatures:
             if task_name not in task_occ_map:
                 continue
 
-            # Coba tiap occurrence untuk task_name sampai sukses menghitung subset tidak kosong
             for occ_num in task_occ_map[task_name]:
                 seg = loader.extract_occurrence_segment(df, task_name, occ_num)
-                # Syarat minimal jumlah sampel agar bisa dihitung (4 sampel adalah batas ekstrem absolute min variance)
-                # Idealnya minimal di atas 1 detik (len(seg) > sfreq), tapi komprominya adalah agar tak None
                 if seg.empty or len(seg) < min(100, loader.sfreq * 0.5):
                     continue
 
                 feat_df = EEGFeatures.compute_subband_features(
                     seg, channels, loader.sfreq, subbands, features,
                     include_frequency=include_frequency,
+                    psd_method=psd_method, psd_fmin=psd_fmin,
+                    psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
                 )
-                
-                # Jika sukses dihitung dan tidak kosong, simpan dan hentikan loop (sudah dapat representasi pertama task tersebut)
+
                 if not feat_df.empty:
                     feat_df.insert(0, "task", task_name)
                     all_rows.append(feat_df)

@@ -44,7 +44,14 @@ def main():
     )
 
     # Routing
-    if cfg["batch_mode"]:
+    if cfg.get("is_openbci_batch"):
+        # OpenBCI batch from ZIP
+        from ui.batch_openbci import run_openbci_batch, render_openbci_batch_results
+        if cfg["batch_process"]:
+            run_openbci_batch(cfg)
+        if st.session_state.get("openbci_batch_processed"):
+            render_openbci_batch_results(cfg)
+    elif cfg["batch_mode"]:
         if cfg["batch_process"]:
             run_batch_processing(cfg)
         if st.session_state.batch_processed:
@@ -55,3 +62,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

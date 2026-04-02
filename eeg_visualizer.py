@@ -72,14 +72,21 @@ class EEGVisualizer:
         return EEGVisualizer.plot_raw_signal(task_df, channels, time_range, title)
 
     @staticmethod
-    def plot_psd(raw, fmin=0, fmax=60, title="Power Spectral Density"):
-        """PSD plot dari raw MNE object."""
-        spectrum = raw.compute_psd(fmin=fmin, fmax=fmax, verbose=False)
-        psds, freqs = spectrum.get_data(return_freqs=True)
+    def plot_psd(raw, method="welch", fmin=0, fmax=49, n_fft=None,
+                 title=None):
+        """PSD plot dari raw MNE object dengan pilihan metode."""
+        from processing.psd import PSDAnalyzer
+
+        psds, freqs, ch_names = PSDAnalyzer.compute_psd_raw(
+            raw, method=method, fmin=fmin, fmax=fmax, n_fft=n_fft,
+        )
         psds_db = 10 * np.log10(psds + 1e-20)
 
+        if title is None:
+            title = f"Power Spectral Density ({method.capitalize()})"
+
         fig = go.Figure()
-        for i, ch in enumerate(raw.ch_names):
+        for i, ch in enumerate(ch_names):
             color = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
             fig.add_trace(go.Scatter(
                 x=freqs, y=psds_db[i], name=ch,

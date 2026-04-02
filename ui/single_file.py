@@ -10,6 +10,9 @@ from config import DEFAULT_SUBBANDS, DEFAULT_FEATURES, TASK_COLORS, ACCENT_LIGHT
 from processing.loader import EEGLoader
 from processing.filters import EEGFilters
 from processing.features import EEGFeatures
+from processing.psd import PSDAnalyzer
+from processing.epoching import EpochEngine
+from processing.connectivity import ConnectivityAnalyzer
 
 from visualization.signal_plots import SignalPlots
 from visualization.feature_plots import FeaturePlots
@@ -21,7 +24,7 @@ def render_single_file(cfg):
     Dipanggil dari render_main() ketika tidak dalam batch mode.
     """
     if st.session_state.processor is None:
-        st.info("Silakan unggah file EDF atau ZIP melalui panel samping.")
+        st.info("Silakan unggah file EDF, TXT (OpenBCI), atau ZIP melalui panel samping.")
         return
 
     loader: EEGLoader = st.session_state.processor
@@ -106,6 +109,10 @@ def run_processing(loader: EEGLoader, cfg):
             loader, cfg["bp_low"], cfg["bp_high"], order=cfg["bp_order"]
         )
 
+        # Common Average Reference
+        if cfg.get("use_car"):
+            EEGFilters.apply_car(loader)
+
         if cfg["use_ica"]:
             EEGFilters.apply_ica(
                 loader, n_components=cfg["ica_n"], method=cfg["ica_method"]
@@ -118,21 +125,52 @@ def run_processing(loader: EEGLoader, cfg):
         subbands = cfg["subbands"] or DEFAULT_SUBBANDS
         features = cfg["features"] or DEFAULT_FEATURES
         include_freq = cfg.get("include_frequency", True)
+        psd_method = cfg.get("psd_method", "welch")
+        psd_fmin = cfg.get("psd_fmin", 0.0)
+        psd_fmax = cfg.get("psd_fmax", 49.0)
+        psd_n_fft = cfg.get("psd_n_fft", None)
 
         # Fitur keseluruhan
         features_df = EEGFeatures.compute_subband_features(
             df, channels, loader.sfreq, subbands, features,
             include_frequency=include_freq,
+            psd_method=psd_method, psd_fmin=psd_fmin,
+            psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
         )
         st.session_state.features_df = features_df
 
         # Fitur per task
         tasks = cfg["tasks"]
+        use_epoching = cfg.get("use_epoching", False)
+        
         if tasks:
-            task_features_df = EEGFeatures.compute_task_features(
-                loader, df, channels, tasks, subbands, features,
-                include_frequency=include_freq,
-            )
+            if use_epoching:
+                if cfg.get("epoch_mode", "fixed") == "fixed":
+                    task_features_df = EpochEngine.compute_epoched_task_features(
+                        loader, df, channels, tasks, loader.sfreq, subbands, features,
+                        epoch_duration=cfg.get("epoch_duration", 2.0),
+                        reject_threshold=cfg.get("epoch_reject_threshold", 100.0) if cfg.get("use_epoch_reject") else None,
+                        include_frequency=include_freq,
+                        psd_method=psd_method, psd_fmin=psd_fmin,
+                        psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
+                    )
+                else:
+                    task_features_df = EpochEngine.compute_windowed_task_features(
+                        loader, df, channels, tasks, loader.sfreq, subbands, features,
+                        window_size=cfg.get("epoch_duration", 2.0), 
+                        overlap=cfg.get("window_overlap", 0.5),
+                        include_frequency=include_freq,
+                        psd_method=psd_method, psd_fmin=psd_fmin,
+                        psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
+                    )
+            else:
+                task_features_df = EEGFeatures.compute_task_features(
+                    loader, df, channels, tasks, subbands, features,
+                    include_frequency=include_freq,
+                    psd_method=psd_method, psd_fmin=psd_fmin,
+                    psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
+                )
+            
             task_summary_df = loader.get_task_summary(df)
             st.session_state.task_features_df = task_features_df
             st.session_state.task_summary_df = task_summary_df
@@ -146,6 +184,58 @@ def run_processing(loader: EEGLoader, cfg):
             st.session_state.ratios_df = ratios_df
         else:
             st.session_state.ratios_df = pd.DataFrame()
+
+        # Connectivity (PLI / wPLI)
+        if cfg.get("use_connectivity") and channels:
+            conn_channels = cfg.get("connectivity_channels", [])
+            # Jika user mendefinisikan channel, filter hanya gunakan itu
+            if conn_channels:
+                ch_list_conn = [ch for ch in channels if ch in conn_channels]
+                if not ch_list_conn:
+                    st.warning("Channel konektivitas yang diketik tidak cocok dengan channel data. Jatuh kembali memakai semua channel.")
+                    ch_list_conn = channels
+            else:
+                ch_list_conn = channels
+                
+            with st.spinner(f"Menghitung Konektivitas ({cfg['connectivity_method'].upper()})..."):
+                if tasks:
+                    task_conn_dict = ConnectivityAnalyzer.compute_task_connectivity(
+                        loader, df, ch_list_conn, tasks, loader.sfreq,
+                        method=cfg["connectivity_method"], subbands=subbands,
+                        use_epoching=cfg.get("use_epoching", False),
+                        epoch_duration=cfg.get("epoch_duration", 2.0),
+                    )
+                    st.session_state.task_conn_dict = task_conn_dict
+                else:
+                    # Seluruh data jika tidak ada task terdeteksi
+                    raw_data = df[ch_list_conn].values.T
+                    chunk_duration = cfg.get("epoch_duration", 2.0) if cfg.get("use_epoching", False) else 2.0
+                    
+                    samples_per_epoch = int(chunk_duration * loader.sfreq)
+                    n_samples = raw_data.shape[1]
+                    n_epochs = n_samples // samples_per_epoch
+
+                    if n_epochs < 2:
+                        if n_samples >= int(loader.sfreq * 1.0):
+                            samples_per_epoch = n_samples // 2
+                            n_epochs = 2
+                            trimmed = raw_data[:, :n_epochs * samples_per_epoch]
+                            data_3d = trimmed.reshape(raw_data.shape[0], n_epochs, samples_per_epoch).transpose(1, 0, 2)
+                        else:
+                            data_3d = raw_data[np.newaxis, :, :]
+                    else:
+                        trimmed = raw_data[:, :n_epochs * samples_per_epoch]
+                        data_3d = trimmed.reshape(
+                            raw_data.shape[0], n_epochs, samples_per_epoch
+                        ).transpose(1, 0, 2)
+
+                    conn = ConnectivityAnalyzer.compute_connectivity(
+                        data_3d, loader.sfreq, ch_list_conn,
+                        method=cfg["connectivity_method"], subbands=subbands,
+                    )
+                    st.session_state.task_conn_dict = {"Keseluruhan": conn}
+        else:
+            st.session_state.task_conn_dict = {}
 
         st.session_state.processed = True
 
@@ -280,9 +370,16 @@ def render_results(loader: EEGLoader, cfg):
         '<p class="section-title">Exploratory Data Analysis</p>',
         unsafe_allow_html=True,
     )
-    tab_dist, tab_psd, tab_corr, tab_annot = st.tabs(
-        ["Distribusi", "PSD", "Korelasi", "Marker"]
-    )
+    
+    use_conn = cfg.get("use_connectivity", False)
+    tab_names = ["Distribusi", "PSD", "Korelasi", "Marker"]
+    if use_conn:
+        tab_names.append("Connectivity")
+        
+    tabs = st.tabs(tab_names)
+    tab_dist, tab_psd, tab_corr, tab_annot = tabs[:4]
+    if use_conn:
+        tab_conn = tabs[4]
 
     with tab_dist:
         fig_dist = SignalPlots.plot_signal_distribution(df, channels)
@@ -290,8 +387,55 @@ def render_results(loader: EEGLoader, cfg):
             st.plotly_chart(fig_dist, use_container_width=True)
 
     with tab_psd:
-        fig_psd = SignalPlots.plot_psd(loader.raw)
+        psd_method = cfg.get("psd_method", "welch")
+        psd_fmin = cfg.get("psd_fmin", 0.0)
+        psd_fmax = cfg.get("psd_fmax", 49.0)
+        psd_n_fft = cfg.get("psd_n_fft", None)
+
+        st.caption(
+            f"Metode: **{psd_method.capitalize()}** | "
+            f"Frekuensi: {psd_fmin}–{psd_fmax} Hz | "
+            f"n_fft: {'Auto' if psd_n_fft is None else psd_n_fft}"
+        )
+
+        # PSD keseluruhan
+        fig_psd = SignalPlots.plot_psd(
+            loader.raw, method=psd_method,
+            fmin=psd_fmin, fmax=psd_fmax, n_fft=psd_n_fft,
+        )
         st.plotly_chart(fig_psd, use_container_width=True)
+
+        # PSD per-task (overlay)
+        if tasks:
+            st.markdown("**PSD per Task (Overlay)**")
+            psd_per_task, psd_ch_names = PSDAnalyzer.compute_psd_per_task(
+                loader, df, method=psd_method,
+                fmin=psd_fmin, fmax=psd_fmax, n_fft=psd_n_fft,
+            )
+            if psd_per_task:
+                fig_psd_task = SignalPlots.plot_psd_per_task(
+                    psd_per_task, psd_ch_names,
+                )
+                if fig_psd_task:
+                    st.plotly_chart(fig_psd_task, use_container_width=True)
+            else:
+                st.info("Tidak ada segmen task yang cukup panjang untuk PSD.")
+
+        # Band power dari PSD (bar chart)
+        st.markdown("**Band Power dari PSD**")
+        psds_raw, freqs_raw, ch_names_raw = PSDAnalyzer.compute_psd_raw(
+            loader.raw, method=psd_method,
+            fmin=psd_fmin, fmax=psd_fmax, n_fft=psd_n_fft,
+        )
+        subbands_cfg = cfg["subbands"] or DEFAULT_SUBBANDS
+        bp_df = PSDAnalyzer.compute_band_power_from_psd(
+            psds_raw, freqs_raw, ch_names_raw, subbands_cfg,
+        )
+        if not bp_df.empty:
+            fig_bp = SignalPlots.plot_psd_band_power_bars(bp_df)
+            if fig_bp:
+                st.plotly_chart(fig_bp, use_container_width=True)
+            st.dataframe(bp_df, use_container_width=True, hide_index=True)
 
     with tab_corr:
         fig_corr = SignalPlots.plot_channel_correlation(df, channels)
@@ -307,6 +451,52 @@ def render_results(loader: EEGLoader, cfg):
             st.plotly_chart(fig_annot, use_container_width=True)
         else:
             st.info("File ini tidak memiliki annotation/marker.")
+
+    if use_conn:
+        with tab_conn:
+            task_conn_dict = st.session_state.get("task_conn_dict", {})
+            if not task_conn_dict:
+                st.info("Data konektivitas tidak tersedia.")
+            else:
+                conn_method = cfg.get("connectivity_method", "wpli")
+                st.markdown(f"**Functional Connectivity ({conn_method.upper()})**")
+                
+                all_sb_conn = []
+                for td in task_conn_dict.values():
+                    for sb in td.keys():
+                        if sb not in all_sb_conn:
+                            all_sb_conn.append(sb)
+                
+                if not all_sb_conn:
+                    st.info("Tidak ada data subband.")
+                else:
+                    sel_sb_conn = st.selectbox("Subband", all_sb_conn, key="conn_sb_sel")
+                    
+                    if tasks and len(tasks) > 1:
+                        fig_conn_comp = SignalPlots.plot_connectivity_comparison(
+                            task_conn_dict, channels, sel_sb_conn, method=conn_method
+                        )
+                        if fig_conn_comp:
+                            st.plotly_chart(fig_conn_comp, use_container_width=True)
+                            
+                    st.markdown("**Detail Matriks**")
+                    tasks_avail = list(task_conn_dict.keys())
+                    sel_task_conn = st.selectbox("Task", tasks_avail, key="conn_task_sel")
+                    
+                    if sel_sb_conn in task_conn_dict[sel_task_conn]:
+                        matrix = task_conn_dict[sel_task_conn][sel_sb_conn]
+                        fig_cb = SignalPlots.plot_connectivity_matrix(
+                            matrix, channels, method=conn_method, 
+                            subband=sel_sb_conn, task=sel_task_conn
+                        )
+                        st.plotly_chart(fig_cb, use_container_width=True)
+                        
+                        conn_df = ConnectivityAnalyzer.connectivity_to_dataframe(
+                            {sel_sb_conn: matrix}, channels, method=conn_method, task_name=sel_task_conn
+                        )
+                        st.dataframe(conn_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"Tidak ada data '{sel_sb_conn}' untuk task '{sel_task_conn}'.")
 
     # --- Feature summary ---
     st.markdown(
@@ -364,6 +554,53 @@ def _render_task_section(loader, df, channels, tasks, task_features_df,
             st.dataframe(display_df, use_container_width=True, hide_index=True)
         else:
             st.info("Tidak ada task yang ditemukan.")
+
+    # --- Epoching Visualization (BARU) ---
+    use_epoching = cfg.get("use_epoching", False)
+    epoch_mode = cfg.get("epoch_mode", "fixed")
+    
+    if use_epoching and task_features_df is not None and not task_features_df.empty:
+        st.divider()
+        if epoch_mode == "sliding":
+            st.markdown("### Spectrogram (Sliding Window)")
+            sp_ch = st.selectbox("Channel untuk Spectrogram", channels, key="spec_ch")
+            # Cek kolom fitur (selain meta)
+            meta_spec = {"task", "window_idx", "start_time", "end_time", "channel", "subband"}
+            feat_spec = [c for c in task_features_df.columns if c not in meta_spec]
+            if feat_spec:
+                sp_ft = st.selectbox("Fitur", feat_spec, key="spec_ft")
+                
+                # Plot spectrogram per task
+                for tsk in tasks:
+                    tsk_df = task_features_df[task_features_df["task"] == tsk]
+                    if not tsk_df.empty:
+                        fig_sp = SignalPlots.plot_spectrogram(
+                            tsk_df, sp_ch, feature_name=sp_ft, 
+                            title=f"Spectrogram '{tsk}' — Ch {sp_ch} ({sp_ft})"
+                        )
+                        if fig_sp:
+                            st.plotly_chart(fig_sp, use_container_width=True)
+        else:
+            st.markdown("### Ringkasan Epoch (Fixed Length)")
+            # Cek total rejected
+            if "n_rejected" in task_features_df.columns:
+                n_rej = task_features_df["n_rejected"].sum()
+                st.info(f"Total epoch ditolak (artefak): {n_rej}")
+                
+            meta_ep = {"task", "channel", "subband", "n_epochs", "n_rejected"}
+            feat_ep = [c for c in task_features_df.columns if c not in meta_ep and not c.endswith("_std")]
+            if feat_ep:
+                ep_ft = st.selectbox("Fitur untuk Ringkasan", feat_ep, key="ep_ft")
+                # Kita harus agregasi per task & subband (rata-rata antar semua channel) untuk plotting
+                grp_df = task_features_df.groupby(["task", "subband"], as_index=False).mean(numeric_only=True)
+                fig_ep = SignalPlots.plot_epoch_summary(grp_df, feature_name=ep_ft)
+                if fig_ep:
+                    st.plotly_chart(fig_ep, use_container_width=True)
+                    
+            st.dataframe(task_features_df, use_container_width=True, hide_index=True)
+        
+        # Hentikan section ini jika epoching aktif (jangan jalankan logic occ_mode asli)
+        return
 
     # --- Occurrence mode toggle ---
     st.divider()
@@ -445,6 +682,10 @@ def _render_task_section(loader, df, channels, tasks, task_features_df,
         active_feat_df = EEGFeatures.compute_occurrence_features(
             loader, df, channels, tasks, subbands, features_list,
             include_frequency=include_freq,
+            psd_method=cfg.get("psd_method", "welch"),
+            psd_fmin=cfg.get("psd_fmin", 0.0),
+            psd_fmax=cfg.get("psd_fmax", 49.0),
+            psd_n_fft=cfg.get("psd_n_fft", None),
         )
         task_col = "task_occ"  # Gunakan label Resting_1, Typing_1, dst
         meta_exclude = {"task", "occurrence", "task_occ", "channel", "subband"}
@@ -452,6 +693,10 @@ def _render_task_section(loader, df, channels, tasks, task_features_df,
         active_feat_df = EEGFeatures.compute_aggregated_occurrence_features(
             loader, df, channels, tasks, subbands, features_list,
             include_frequency=include_freq,
+            psd_method=cfg.get("psd_method", "welch"),
+            psd_fmin=cfg.get("psd_fmin", 0.0),
+            psd_fmax=cfg.get("psd_fmax", 49.0),
+            psd_n_fft=cfg.get("psd_n_fft", None),
         )
         task_col = "task"
         meta_exclude = {"task", "channel", "subband"}

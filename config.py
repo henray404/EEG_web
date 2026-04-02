@@ -57,6 +57,38 @@ NOTCH_FREQUENCIES = [50, 60]
 BAD_CHANNEL_THRESHOLD = 3.0
 
 # ------------------------------------------------------------------ #
+#  PSD (Power Spectral Density)                                       #
+# ------------------------------------------------------------------ #
+
+PSD_METHODS = ["welch", "multitaper"]
+DEFAULT_PSD_METHOD = "welch"
+DEFAULT_PSD_FMIN = 0.0
+DEFAULT_PSD_FMAX = 49.0
+DEFAULT_PSD_N_FFT = None   # None = auto (2 * sfreq, capped by data length)
+
+# ------------------------------------------------------------------ #
+#  Epoching & Sliding Windows                                         #
+# ------------------------------------------------------------------ #
+
+DEFAULT_EPOCH_DURATION = 2.0    # detik
+MIN_EPOCH_DURATION = 0.5
+MAX_EPOCH_DURATION = 10.0
+
+DEFAULT_WINDOW_SIZE = 2.0       # detik
+DEFAULT_WINDOW_OVERLAP = 0.5    # 50% overlap (rasio 0–0.75)
+MIN_WINDOW_SIZE = 0.5
+MAX_WINDOW_SIZE = 10.0
+
+DEFAULT_EPOCH_REJECT_UV = 100.0  # threshold rejection epoch (µV)
+
+# ------------------------------------------------------------------ #
+#  Connectivity (PLI / wPLI)                                          #
+# ------------------------------------------------------------------ #
+
+CONNECTIVITY_METHODS = ["pli", "wpli"]
+DEFAULT_CONNECTIVITY_METHOD = "wpli"
+
+# ------------------------------------------------------------------ #
 #  Tema warna - ITS Robocon (Blue)                                    #
 # ------------------------------------------------------------------ #
 
@@ -89,6 +121,23 @@ CHANNEL_COLORS = [
     "#0288D1", "#0277BD", "#01579B", "#039BE5",
     "#00ACC1", "#0097A7", "#00838F", "#006064",
 ]
+
+# ------------------------------------------------------------------ #
+#  OpenBCI Cyton                                                       #
+# ------------------------------------------------------------------ #
+
+OPENBCI_CHANNEL_MAP = {
+    "EXG Channel 2": "T3",
+    "EXG Channel 3": "T4",
+    "EXG Channel 4": "T5",
+    "EXG Channel 5": "T6",
+    "EXG Channel 6": "O1",
+    "EXG Channel 7": "O2",
+}
+OPENBCI_SFREQ = 250.0
+
+# Regex patterns untuk deteksi kondisi dari nama file OpenBCI
+OPENBCI_CONDITIONS = ["baseline", "familiar", "unfamiliar", "nonfamiliar"]
 
 TASK_COLORS = {
     "Resting":      "#1E88E5",

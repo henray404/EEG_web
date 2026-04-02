@@ -18,6 +18,7 @@ from processing.loader import EEGLoader
 from processing.filters import EEGFilters
 from processing.features import EEGFeatures
 from processing.delta import DeltaCalculator
+from processing.epoching import EpochEngine
 
 from visualization.feature_plots import FeaturePlots
 from visualization.comparison_plots import ComparisonPlots
@@ -30,16 +31,25 @@ from visualization.comparison_plots import ComparisonPlots
 def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
                          include_frequency=False,
                          use_amplitude=False, use_ica=False,
-                         ica_n=None, ica_method="fastica"):
+                         ica_n=None, ica_method="fastica",
+                         psd_method="welch", psd_fmin=0.0,
+                         psd_fmax=49.0, psd_n_fft=None,
+                         use_epoching=False, epoch_mode="fixed",
+                         epoch_duration=2.0, window_overlap=0.5,
+                         use_epoch_reject=False, epoch_reject_threshold=100.0,
+                         use_connectivity=False, connectivity_method="wpli",
+                         connectivity_channels=None):
     """Worker: proses satu file EDF dari ZIP bytes (thread-safe).
 
     Returns
     -------
-    tuple  (feat_df, tasks_found, erd_df)
+    tuple  (feat_df, tasks_found, erd_df, conn_df)
            feat_df   : fitur per task/channel/subband (atau None)
            tasks_found : list nama task
            erd_df    : DataFrame ERD/ERS paired per task (atau None)
+           conn_df   : DataFrame connectivity (atau None)
     """
+    from processing.connectivity import ConnectivityAnalyzer
     meta = EEGLoader.detect_category(edf_path)
     loader = EEGLoader()
 
@@ -81,11 +91,34 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
 
     if not tasks_found:
         loader._cleanup_tmp()
-        return None, tasks_found, None
+        return None, tasks_found, None, None
 
-    feat_df = EEGFeatures.compute_first_occurrence_features(
+    if use_epoching:
+        if epoch_mode == "fixed":
+            feat_df = EpochEngine.compute_epoched_task_features(
+                loader, df, ch_list, tasks_found, loader.sfreq, subbands, features,
+                epoch_duration=epoch_duration,
+                reject_threshold=epoch_reject_threshold if use_epoch_reject else None,
+                include_frequency=include_frequency,
+                psd_method=psd_method, psd_fmin=psd_fmin,
+                psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
+            )
+            # drop n_epochs etc or keep them
+        else:
+            win_df = EpochEngine.compute_windowed_task_features(
+                loader, df, ch_list, tasks_found, loader.sfreq, subbands, features,
+                window_size=epoch_duration, overlap=window_overlap,
+                include_frequency=include_frequency,
+                psd_method=psd_method, psd_fmin=psd_fmin,
+                psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
+            )
+            feat_df = EpochEngine.aggregate_windowed_features(win_df)
+    else:
+        feat_df = EEGFeatures.compute_first_occurrence_features(
         loader, df, ch_list, tasks_found, subbands, features,
         include_frequency=include_frequency,
+        psd_method=psd_method, psd_fmin=psd_fmin,
+        psd_fmax=psd_fmax, psd_n_fft=psd_n_fft,
     )
 
     # --- Hitung ERD/ERS paired (Resting → Task) per non-Resting task ---
@@ -113,8 +146,34 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
         erd_df.insert(3, "time", meta["time"])
         erd_df.insert(4, "scenario", meta["scenario"])
 
+    # --- Hitung Connectivity (BARU) ---
+    conn_df = None
+    if use_connectivity:
+        ch_list_conn = ch_list
+        if connectivity_channels:
+            ch_list_conn = [c for c in ch_list if c in connectivity_channels]
+            if not ch_list_conn:
+                ch_list_conn = ch_list
+                
+        conn_dict = ConnectivityAnalyzer.compute_task_connectivity(
+            loader, df, ch_list_conn, tasks_found, loader.sfreq,
+            method=connectivity_method, subbands=subbands,
+            use_epoching=use_epoching, epoch_duration=epoch_duration,
+        )
+        if conn_dict:
+            conn_df = ConnectivityAnalyzer.all_tasks_to_dataframe(
+                conn_dict, ch_list_conn, method=connectivity_method
+            )
+            if not conn_df.empty:
+                # Tambahkan meta kolom
+                conn_df.insert(0, "filename", edf_path)
+                conn_df.insert(1, "category", meta["category"])
+                conn_df.insert(2, "subject", meta["subject"])
+                conn_df.insert(3, "time", meta["time"])
+                conn_df.insert(4, "scenario", meta["scenario"])
+
     if feat_df.empty:
-        return None, tasks_found, erd_df
+        return None, tasks_found, erd_df, conn_df
 
     feat_df.insert(0, "filename", edf_path)
     feat_df.insert(1, "category", meta["category"])
@@ -122,7 +181,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
     feat_df.insert(3, "time", meta["time"])
     feat_df.insert(4, "scenario", meta["scenario"])
 
-    return feat_df, tasks_found, erd_df
+    return feat_df, tasks_found, erd_df, conn_df
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +205,21 @@ def run_batch_processing(cfg):
     use_ica = cfg.get("use_ica", False)
     ica_n = cfg.get("ica_n", None)
     ica_method = cfg.get("ica_method", "fastica")
-
+    psd_method = cfg.get("psd_method", "welch")
+    psd_fmin = cfg.get("psd_fmin", 0.0)
+    psd_fmax = cfg.get("psd_fmax", 49.0)
+    psd_n_fft = cfg.get("psd_n_fft", None)
+    
+    use_epoching = cfg.get("use_epoching", False)
+    epoch_mode = cfg.get("epoch_mode", "fixed")
+    epoch_duration = cfg.get("epoch_duration", 2.0)
+    window_overlap = cfg.get("window_overlap", 0.5)
+    use_epoch_reject = cfg.get("use_epoch_reject", False)
+    epoch_reject_threshold = cfg.get("epoch_reject_threshold", 100.0)
+    
+    use_connectivity = cfg.get("use_connectivity", False)
+    connectivity_method = cfg.get("connectivity_method", "wpli")
+    connectivity_channels = cfg.get("connectivity_channels", [])
     progress_bar = st.progress(0, text="Memulai batch processing...")
 
     uploaded.seek(0)
@@ -160,6 +233,7 @@ def run_batch_processing(cfg):
 
     all_dfs = []
     all_erd_dfs = []
+    all_conn_dfs = []
     common_tasks = set()
     n_total = len(edf_list)
 
@@ -181,6 +255,10 @@ def run_batch_processing(cfg):
                 _process_single_edf, zip_bytes, path,
                 channels, subbands, features, include_freq,
                 use_amplitude, use_ica, ica_n, ica_method,
+                psd_method, psd_fmin, psd_fmax, psd_n_fft,
+                use_epoching, epoch_mode, epoch_duration,
+                window_overlap, use_epoch_reject, epoch_reject_threshold,
+                use_connectivity, connectivity_method, connectivity_channels
             ): path
             for path in edf_list
         }
@@ -192,7 +270,10 @@ def run_batch_processing(cfg):
                 text=f"Memproses {i}/{n_total}: {path.split('/')[-1]}",
             )
             try:
-                feat_df, tasks_found, erd_df = future.result()
+                result = future.result()
+                if result is None:
+                    continue
+                feat_df, tasks_found, erd_df, conn_df = result
                 if feat_df is not None and not feat_df.empty:
                     all_dfs.append(feat_df)
                     if not common_tasks:
@@ -201,6 +282,8 @@ def run_batch_processing(cfg):
                         common_tasks |= set(tasks_found)
                 if erd_df is not None and not erd_df.empty:
                     all_erd_dfs.append(erd_df)
+                if conn_df is not None and not conn_df.empty:
+                    all_conn_dfs.append(conn_df)
             except Exception:
                 pass
 
@@ -219,8 +302,14 @@ def run_batch_processing(cfg):
     if all_erd_dfs:
         batch_erd_df = pd.concat(all_erd_dfs, ignore_index=True)
 
+    # Simpan Connectivity results
+    batch_conn_df = pd.DataFrame()
+    if all_conn_dfs:
+        batch_conn_df = pd.concat(all_conn_dfs, ignore_index=True)
+
     st.session_state.batch_df = batch_df
     st.session_state.batch_erd_df = batch_erd_df
+    st.session_state.batch_conn_df = batch_conn_df
     st.session_state.batch_tasks = sorted(common_tasks)
     st.session_state.batch_processed = True
     st.success(
@@ -343,6 +432,9 @@ def render_batch_results(cfg):
 
     # ERD/ERS
     _render_erd_ers(filtered_df, batch_tasks, feat_cols)
+
+    # Connectivity (PLI/wPLI)
+    _render_connectivity_batch(filtered_df)
 
 
 # ---------------------------------------------------------------------------
@@ -1067,3 +1159,51 @@ def _render_erd_ers(filtered_df, batch_tasks, feat_cols):
             key="dl_erd_xlsx",
         )
 
+
+# ---------------------------------------------------------------------------
+# Connectivity Analysis (Batch)
+# ---------------------------------------------------------------------------
+
+def _render_connectivity_batch(filtered_df):
+    """Render tabel Connectivity PLI/wPLI batch."""
+    conn_df = st.session_state.get("batch_conn_df", pd.DataFrame())
+    
+    if conn_df is None or conn_df.empty:
+        return
+        
+    st.markdown('<p class="section-title">Connectivity (PLI / wPLI)</p>', unsafe_allow_html=True)
+    
+    # Filter sesuai dengan filtered_df
+    if "filename" in filtered_df.columns and "filename" in conn_df.columns:
+        valid_files = filtered_df["filename"].unique()
+        conn_df = conn_df[conn_df["filename"].isin(valid_files)].copy()
+    if "subband" in filtered_df.columns and "subband" in conn_df.columns:
+        valid_subbands = filtered_df["subband"].unique()
+        conn_df = conn_df[conn_df["subband"].isin(valid_subbands)].copy()
+        
+    if conn_df.empty:
+        st.warning("Tidak ada data Connectivity setelah filter diterapkan.")
+        return
+        
+    st.dataframe(conn_df, use_container_width=True, height=400, hide_index=True)
+    
+    # Download
+    fl1, fl2 = st.columns(2)
+    with fl1:
+        csv_conn = conn_df.to_csv(index=False).encode("utf-8")
+        method_name = conn_df["method"].iloc[0] if "method" in conn_df.columns and not conn_df.empty else "connectivity"
+        st.download_button(
+            f"Download CSV ({method_name.upper()})", csv_conn,
+            file_name=f"{method_name}_results.csv",
+            mime="text/csv", key="dl_conn_csv",
+        )
+    with fl2:
+        excel_conn = io.BytesIO()
+        with pd.ExcelWriter(excel_conn, engine="openpyxl") as writer:
+            conn_df.to_excel(writer, index=False, sheet_name="Connectivity")
+        st.download_button(
+            f"Download Excel ({method_name.upper()})", excel_conn.getvalue(),
+            file_name=f"{method_name}_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_conn_xlsx",
+        )
