@@ -69,16 +69,16 @@ def render_sidebar():
         st.markdown("# EEG Analysis Tool")
 
         # --- File Upload ---
-        st.markdown("### Unggah File")
+        st.markdown("### Mode Analisis")
         upload_type = st.radio(
-            "Tipe", ["File EDF", "File TXT (OpenBCI)", "File ZIP (dataset)"],
+            "Tipe", ["File EDF", "File ZIP (dataset)"],
             horizontal=True, label_visibility="collapsed",
         )
 
         uploaded = None
         edf_in_zip = None
         batch_mode = False
-        is_openbci = upload_type == "File TXT (OpenBCI)"
+        is_openbci = False
         is_openbci_batch = False
 
         if upload_type == "File EDF":
@@ -86,26 +86,6 @@ def render_sidebar():
                 "Pilih file EDF", type=["edf"],
                 label_visibility="collapsed",
             )
-        elif upload_type == "File TXT (OpenBCI)":
-            uploaded = st.file_uploader(
-                "Pilih file TXT OpenBCI", type=["txt"],
-                label_visibility="collapsed",
-            )
-            if uploaded is not None:
-                # Load TXT OpenBCI
-                cache_key = f"openbci_{uploaded.name}"
-                if st.session_state.get("_loaded_key") != cache_key:
-                    loader = EEGLoader()
-                    try:
-                        uploaded.seek(0)
-                        info = loader.load_openbci_txt(uploaded)
-                        st.session_state.processor = loader
-                        st.session_state.raw_info = info
-                        st.session_state.processed = False
-                        st.session_state._loaded_key = cache_key
-                    except Exception as e:
-                        st.error(f"Gagal memuat TXT: {e}")
-                        uploaded = None
         else:
             uploaded = st.file_uploader(
                 "Pilih file ZIP", type=["zip"],
@@ -115,28 +95,9 @@ def render_sidebar():
                 uploaded.seek(0)
                 try:
                     with st.spinner("Membaca struktur ZIP..."):
-                        # Cek apakah ZIP berisi TXT (OpenBCI) atau EDF
                         edf_list = EEGLoader.list_edf_in_zip(uploaded)
-                        uploaded.seek(0)
-                        txt_list = EEGLoader.list_txt_in_zip(uploaded)
 
-                    if txt_list and not edf_list:
-                        # ZIP berisi TXT → mode OpenBCI batch
-                        is_openbci = True
-                        is_openbci_batch = True
-                        batch_mode = True
-                        st.session_state.batch_mode = True
-                        uploaded.seek(0)
-                        subjects_map, skipped = EEGLoader.scan_openbci_zip(uploaded)
-                        n_subj = len(subjects_map)
-                        n_files = sum(len(v) for v in subjects_map.values())
-                        st.info(
-                            f"📁 OpenBCI dataset: **{n_subj} subjek**, "
-                            f"**{n_files} file TXT** ditemukan."
-                        )
-                        if skipped:
-                            st.warning(f"{len(skipped)} file di-skip (format tidak dikenali).")
-                    elif edf_list:
+                    if edf_list:
                         if len(edf_list) > 1:
                             batch_mode = st.toggle(
                                 "Batch Analisis (semua file)",
@@ -153,7 +114,7 @@ def render_sidebar():
                                 "Klik **Proses Batch** untuk memproses semua."
                             )
                     else:
-                        st.warning("Tidak ada file EDF atau TXT dalam ZIP.")
+                        st.warning("Tidak ada file EDF dalam ZIP.")
                         uploaded = None
                 except Exception as e:
                     st.error(f"Gagal membaca ZIP: {e}")
@@ -262,46 +223,14 @@ def render_sidebar():
                      "lebih halus, tapi butuh data lebih panjang.",
             )
 
-        # --- Epoching & Sliding Windows ---
-        st.markdown("### Epoching & Sliding Windows")
-        use_epoching = st.toggle("Aktifkan Epoching", value=False)
-        
+        # Epoching dipindah ke step post-batch (lihat ui/encoding.py).
+        # Default value tetap dikirim supaya downstream code tidak crash.
+        use_epoching = False
         epoch_mode = "fixed"
         epoch_duration = DEFAULT_EPOCH_DURATION
         window_overlap = DEFAULT_WINDOW_OVERLAP
         use_epoch_reject = False
         epoch_reject_threshold = DEFAULT_EPOCH_REJECT_UV
-        
-        if use_epoching:
-            epoch_mode_str = st.radio(
-                "Mode Epoch", ["Fixed Epoch", "Sliding Window"],
-                horizontal=True, label_visibility="collapsed"
-            )
-            epoch_mode = "fixed" if epoch_mode_str == "Fixed Epoch" else "sliding"
-            
-            if epoch_mode == "fixed":
-                epoch_duration = st.slider(
-                    "Durasi Epoch (s)", 
-                    MIN_EPOCH_DURATION, MAX_EPOCH_DURATION, 
-                    DEFAULT_EPOCH_DURATION, 0.5
-                )
-            else:
-                epoch_duration = st.slider(
-                    "Window Size (s)", 
-                    MIN_WINDOW_SIZE, MAX_WINDOW_SIZE, 
-                    DEFAULT_WINDOW_SIZE, 0.5
-                )
-                window_overlap = st.slider(
-                    "Overlap (%)", 0, 75, int(DEFAULT_WINDOW_OVERLAP * 100), 25
-                ) / 100.0
-            
-            use_epoch_reject = st.checkbox("Aktifkan Epoch Rejection", value=False)
-            if use_epoch_reject:
-                default_reject = 75.0 if use_amplitude else DEFAULT_EPOCH_REJECT_UV
-                epoch_reject_threshold = st.slider(
-                    "Threshold Rejection (µV)", 25.0, 200.0, default_reject, 5.0,
-                    help="Buang epoch yang nilai amplitudo maksimalnya melebihi threshold ini."
-                )
 
         # --- Connectivity (PLI / wPLI) ---
         st.markdown("### Connectivity")

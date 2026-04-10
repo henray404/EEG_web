@@ -20,6 +20,11 @@ from config import (
     DEFAULT_PSD_N_FFT,
 )
 
+# Kompatibilitas untuk numpy >= 2.0 di mana np.trapz diubah menjadi np.trapezoid
+try:
+    _trapz = np.trapezoid
+except AttributeError:
+    _trapz = np.trapz
 
 def _auto_n_fft(sfreq, n_samples, n_fft=None):
     """Tentukan n_fft otomatis.
@@ -246,7 +251,7 @@ class PSDAnalyzer:
 
         for ch_idx, ch in enumerate(ch_names):
             psd_ch = psds[ch_idx]
-            total_power = np.trapz(psd_ch, dx=freq_resolution)
+            total_power = float(_trapz(psd_ch, dx=freq_resolution) if len(psd_ch) > 0 else 0.0)
 
             for sb_name, (low, high) in subbands.items():
                 band_mask = (freqs >= low) & (freqs <= high)
@@ -263,7 +268,7 @@ class PSDAnalyzer:
                 band_psd = psd_ch[band_mask]
                 band_freqs = freqs[band_mask]
 
-                band_power = float(np.trapz(band_psd, dx=freq_resolution))
+                band_power = float(_trapz(band_psd, dx=freq_resolution) if len(band_psd) > 0 else 0.0)
                 relative_power = (
                     float(band_power / total_power)
                     if total_power > 0 else 0.0

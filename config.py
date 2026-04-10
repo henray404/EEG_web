@@ -16,7 +16,7 @@ DEFAULT_SUBBANDS = {
     "Low_Beta": (12, 16),
     "High_Beta": (20, 30),
     "Beta": (13, 30),
-    "Gamma": (30, 49),
+    "Gamma": (30, 49.5),
 }
 
 # Threshold amplitudo EEG (µV) — sinyal di atas ini dianggap artefak
@@ -63,7 +63,7 @@ BAD_CHANNEL_THRESHOLD = 3.0
 PSD_METHODS = ["welch", "multitaper"]
 DEFAULT_PSD_METHOD = "welch"
 DEFAULT_PSD_FMIN = 0.0
-DEFAULT_PSD_FMAX = 49.0
+DEFAULT_PSD_FMAX = 49.5
 DEFAULT_PSD_N_FFT = None   # None = auto (2 * sfreq, capped by data length)
 
 # ------------------------------------------------------------------ #
@@ -76,8 +76,30 @@ MAX_EPOCH_DURATION = 10.0
 
 DEFAULT_WINDOW_SIZE = 2.0       # detik
 DEFAULT_WINDOW_OVERLAP = 0.5    # 50% overlap (rasio 0–0.75)
-MIN_WINDOW_SIZE = 0.5
+MIN_WINDOW_SIZE = 0.1           # diturunkan dari 0.5 agar support 0.3s encoding
 MAX_WINDOW_SIZE = 10.0
+
+# ------------------------------------------------------------------ #
+#  Encoding (Batch Feature Extraction)                                #
+# ------------------------------------------------------------------ #
+
+DEFAULT_ENCODING_WINDOW = 0.3   # detik per window untuk encoding
+DEFAULT_ENCODING_OVERLAP = 0.0  # tanpa overlap (baseline)
+EEGET_ALS_SFREQ = 128.0        # sampling frequency EEGET-ALS dataset
+EEGET_ALS_N_CHANNELS = 32      # jumlah channel EEGET-ALS dataset
+
+# Mapping skenario EEGET-ALS ke label numerik
+EEGET_ALS_SCENARIOS = {
+    1: "Lifting left hand",
+    2: "Lifting right hand",
+    3: "Lifting left leg",
+    4: "Lifting right leg",
+    5: "Opening mouth",
+    6: "Nodding head",
+    7: "Shaking head",
+    8: "Desire to drink water",
+    9: "Desire to use bathroom",
+}
 
 DEFAULT_EPOCH_REJECT_UV = 100.0  # threshold rejection epoch (µV)
 

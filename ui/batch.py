@@ -38,16 +38,25 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
                          epoch_duration=2.0, window_overlap=0.5,
                          use_epoch_reject=False, epoch_reject_threshold=100.0,
                          use_connectivity=False, connectivity_method="wpli",
-                         connectivity_channels=None):
+                         connectivity_channels=None,
+                         cache_dir=None):
     """Worker: proses satu file EDF dari ZIP bytes (thread-safe).
+
+    Jika ``cache_dir`` diberikan, DataFrame preprocessed disimpan ke
+    pickle di dalam folder tersebut. Path cache + metadata dikembalikan
+    pada field ``cache_info`` sehingga step encoding post-batch bisa
+    langsung pakai data ini tanpa load EDF ulang.
 
     Returns
     -------
-    tuple  (feat_df, tasks_found, erd_df, conn_df)
-           feat_df   : fitur per task/channel/subband (atau None)
-           tasks_found : list nama task
-           erd_df    : DataFrame ERD/ERS paired per task (atau None)
-           conn_df   : DataFrame connectivity (atau None)
+    tuple  (feat_df, tasks_found, erd_df, conn_df, cache_info)
+           feat_df    : fitur per task/channel/subband (atau None)
+           tasks_found: list nama task
+           erd_df     : DataFrame ERD/ERS paired per task (atau None)
+           conn_df    : DataFrame connectivity (atau None)
+           cache_info : dict {cache_path, filename, subject_id,
+                              scenario, scenario_id, channels, sfreq,
+                              tasks} atau None
     """
     from processing.connectivity import ConnectivityAnalyzer
     meta = EEGLoader.detect_category(edf_path)
@@ -57,13 +66,13 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
         buf = io.BytesIO(zip_bytes)
         loader.load_edf_from_zip(buf, edf_path)
     except Exception:
-        return None, [], None
+        return None, [], None, None, None
 
     ch_list = channels if channels else loader.channel_names
     ch_list = [c for c in ch_list if c in loader.channel_names]
     if not ch_list:
         loader._cleanup_tmp()
-        return None, [], None
+        return None, [], None, None, None
 
     # Amplitude filter (clipping artefak)
     if use_amplitude:
@@ -89,9 +98,42 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
     df = loader.extract_dataframe()
     tasks_found = [t for t in loader.get_task_list() if t != "none"]
 
+    # --- Cache preprocessed DataFrame untuk post-batch encoding ---
+    cache_info = None
+    if cache_dir is not None:
+        try:
+            # Parse subject_id dan scenario_id dari meta (struktur EEGET-ALS)
+            subject_id = meta.get("subject", "unknown")
+            scenario_str = meta.get("scenario", "")  # e.g. "scenario5"
+            try:
+                scenario_id = int(scenario_str.replace("scenario", ""))
+            except (ValueError, AttributeError):
+                scenario_id = -1
+
+            safe_name = (
+                edf_path.replace("/", "__")
+                        .replace("\\", "__")
+                        .replace(" ", "_")
+            )
+            cache_path = os.path.join(cache_dir, f"{safe_name}.pkl")
+            df.to_pickle(cache_path)
+
+            cache_info = {
+                "cache_path": cache_path,
+                "filename": edf_path,
+                "subject_id": subject_id,
+                "scenario": scenario_str if scenario_str else "unknown",
+                "scenario_id": scenario_id,
+                "channels": list(loader.channel_names),
+                "sfreq": float(loader.sfreq),
+                "tasks": list(tasks_found),
+            }
+        except Exception:
+            cache_info = None
+
     if not tasks_found:
         loader._cleanup_tmp()
-        return None, tasks_found, None, None
+        return None, tasks_found, None, None, cache_info
 
     if use_epoching:
         if epoch_mode == "fixed":
@@ -173,7 +215,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
                 conn_df.insert(4, "scenario", meta["scenario"])
 
     if feat_df.empty:
-        return None, tasks_found, erd_df, conn_df
+        return None, tasks_found, erd_df, conn_df, cache_info
 
     feat_df.insert(0, "filename", edf_path)
     feat_df.insert(1, "category", meta["category"])
@@ -181,7 +223,7 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
     feat_df.insert(3, "time", meta["time"])
     feat_df.insert(4, "scenario", meta["scenario"])
 
-    return feat_df, tasks_found, erd_df, conn_df
+    return feat_df, tasks_found, erd_df, conn_df, cache_info
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +231,33 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
 # ---------------------------------------------------------------------------
 
 def run_batch_processing(cfg):
-    """Jalankan batch analysis: baca semua EDF dari ZIP, hitung fitur."""
+    """Jalankan batch analysis: baca semua EDF dari ZIP, hitung fitur.
+
+    Selain menghitung fitur per-task, juga men-cache DataFrame
+    preprocessed tiap file ke pickle di dalam folder temp. Cache ini
+    dipakai oleh step post-batch encoding (lihat
+    ``ui/encoding.py::render_post_batch_encoding``) sehingga tidak
+    perlu load EDF ulang.
+    """
+    import shutil
+    import tempfile
     from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
     uploaded = cfg.get("uploaded")
     if uploaded is None:
         st.warning("File ZIP belum diunggah.")
         return
+
+    # Bersihkan cache sebelumnya kalau ada
+    prev_cache_dir = st.session_state.get("batch_cache_dir")
+    if prev_cache_dir and os.path.isdir(prev_cache_dir):
+        try:
+            shutil.rmtree(prev_cache_dir, ignore_errors=True)
+        except Exception:
+            pass
+    cache_dir = tempfile.mkdtemp(prefix="eeg_batch_cache_")
+    st.session_state.batch_cache_dir = cache_dir
+    st.session_state.batch_cached_files = []
 
     subbands = cfg["subbands"] or DEFAULT_SUBBANDS
     features = cfg["features"] or DEFAULT_FEATURES
@@ -234,6 +296,7 @@ def run_batch_processing(cfg):
     all_dfs = []
     all_erd_dfs = []
     all_conn_dfs = []
+    all_cache_infos = []
     common_tasks = set()
     n_total = len(edf_list)
 
@@ -258,7 +321,8 @@ def run_batch_processing(cfg):
                 psd_method, psd_fmin, psd_fmax, psd_n_fft,
                 use_epoching, epoch_mode, epoch_duration,
                 window_overlap, use_epoch_reject, epoch_reject_threshold,
-                use_connectivity, connectivity_method, connectivity_channels
+                use_connectivity, connectivity_method, connectivity_channels,
+                cache_dir,
             ): path
             for path in edf_list
         }
@@ -273,7 +337,7 @@ def run_batch_processing(cfg):
                 result = future.result()
                 if result is None:
                     continue
-                feat_df, tasks_found, erd_df, conn_df = result
+                feat_df, tasks_found, erd_df, conn_df, cache_info = result
                 if feat_df is not None and not feat_df.empty:
                     all_dfs.append(feat_df)
                     if not common_tasks:
@@ -284,6 +348,8 @@ def run_batch_processing(cfg):
                     all_erd_dfs.append(erd_df)
                 if conn_df is not None and not conn_df.empty:
                     all_conn_dfs.append(conn_df)
+                if cache_info is not None:
+                    all_cache_infos.append(cache_info)
             except Exception:
                 pass
 
@@ -311,10 +377,23 @@ def run_batch_processing(cfg):
     st.session_state.batch_erd_df = batch_erd_df
     st.session_state.batch_conn_df = batch_conn_df
     st.session_state.batch_tasks = sorted(common_tasks)
+    st.session_state.batch_cached_files = all_cache_infos
     st.session_state.batch_processed = True
+
+    # Reset hasil encoding post-batch sebelumnya
+    for key in (
+        "encoding_done", "encoding_result", "encoding_summary",
+        "encoding_elapsed", "encoding_output_path", "encoding_raw",
+        "chunking_done", "chunking_features_df", "chunking_chain_df",
+        "chunking_summary_df", "chunking_run_summary",
+        "chunking_elapsed", "chunking_paths",
+    ):
+        st.session_state.pop(key, None)
+
     st.success(
         f"Batch processing selesai: {batch_df['filename'].nunique()} file, "
-        f"{len(common_tasks)} task ditemukan."
+        f"{len(common_tasks)} task ditemukan. "
+        f"{len(all_cache_infos)} file ter-cache untuk encoding."
     )
 
 
@@ -324,6 +403,8 @@ def run_batch_processing(cfg):
 
 def render_batch_results(cfg):
     """Tampilkan hasil batch analysis & delta comparison."""
+    from ui.encoding import render_post_batch_encoding
+
     batch_df = st.session_state.batch_df
     batch_tasks = st.session_state.batch_tasks
 
@@ -435,6 +516,9 @@ def render_batch_results(cfg):
 
     # Connectivity (PLI/wPLI)
     _render_connectivity_batch(filtered_df)
+
+    # Post-batch: Epoching + Encoding (sliding window / chunking)
+    render_post_batch_encoding()
 
 
 # ---------------------------------------------------------------------------

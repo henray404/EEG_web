@@ -13,6 +13,8 @@ __pycache__/
 
 ignored/
 
+docs/
+
 dokumentasi/
 
 # Jupyter Notebook checkpoints
@@ -33,6 +35,14 @@ Thumbs.db
 *.edf
 *.fif
 *.bdf
+
+chunking.py
+
+claude.md
+
+dummy.txt
+10baseline.txt
+tests_tmp.py
 
 
 GUIDE.md

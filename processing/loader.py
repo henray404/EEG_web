@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from config import OPENBCI_CHANNEL_MAP, OPENBCI_SFREQ, OPENBCI_CONDITIONS
-
+    
 
 class EEGLoader:
     """Loader untuk file EDF dan ZIP berisi EDF."""

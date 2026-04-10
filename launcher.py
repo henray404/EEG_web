@@ -234,10 +234,15 @@ class LauncherApp:
                     self.log("  Auto-update gagal. Melanjutkan versi lama.")
             else:
                 self.log("  Sudah versi terbaru.")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self.log("  Mode offline aktif (Data remote berjalan lokal).")
+            else:
+                self.log(f"  Cek update dilewati (HTTP {e.code}). Mode lokal aktif.")
         except Exception as e:
             err_name = type(e).__name__
             logging.warning(f"Update check failed: {err_name}: {e}")
-            self.log(f"  Gagal cek update ({err_name}). Melewati.")
+            self.log(f"  Cek update dilewati ({err_name}). Mode lokal aktif.")
         self.set_progress(75)
 
         # Step 4: Launch Streamlit

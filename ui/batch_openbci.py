@@ -54,10 +54,12 @@ def _process_single_txt(zip_bytes, txt_path, subbands, features,
         buf = io.BytesIO(zip_bytes)
         loader.load_txt_from_zip(buf, txt_path)
     except Exception as e:
+        meta["error"] = f"Load gagal: {e}"
         return None, None, meta
 
     ch_list = loader.channel_names
     if not ch_list:
+        meta["error"] = "Filter channel kosong."
         return None, None, meta
 
     # --- Preprocessing ---
@@ -103,14 +105,20 @@ def _process_single_txt(zip_bytes, txt_path, subbands, features,
     sfreq = loader.sfreq
 
     # --- Fitur statistik ---
-    feat_df = EEGFeatures.compute_subband_features(
-        df, ch_list, sfreq=sfreq, subbands=subbands, features=features,
-        include_frequency=include_frequency,
-        psd_method=psd_method,
-        psd_fmin=psd_fmin,
-        psd_fmax=psd_fmax,
-        psd_n_fft=psd_n_fft,
-    )
+    try:
+        feat_df = EEGFeatures.compute_subband_features(
+            df, ch_list, sfreq=sfreq, subbands=subbands, features=features,
+            include_frequency=include_frequency,
+            psd_method=psd_method,
+            psd_fmin=psd_fmin,
+            psd_fmax=psd_fmax,
+            psd_n_fft=psd_n_fft,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        meta["error"] = f"Fitur gagal: {e}"
+        return None, None, meta
 
     # --- Connectivity ---
     conn_df = None
@@ -212,6 +220,8 @@ def run_openbci_batch(cfg):
     cpu_count = max(1, os.cpu_count() or 1)
     max_workers = min(cpu_count, n_total)
 
+    failed_files = {}
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
         for subj_id, condition, txt_path in all_tasks:
@@ -256,14 +266,24 @@ def run_openbci_batch(cfg):
                 feat_df, conn_df, meta = future.result()
                 if feat_df is not None and not feat_df.empty:
                     all_feat_dfs.append(feat_df)
+                else:
+                    err_msg = meta.get("error", "Unknown Error") if meta else "No returns"
+                    failed_files[txt_path] = err_msg
+                
                 if conn_df is not None and not conn_df.empty:
                     all_conn_dfs.append(conn_df)
             except Exception as e:
                 import traceback
                 print(f"Error in batch worker for {subj_id} ({condition}): {e}")
                 traceback.print_exc()
+                failed_files[txt_path] = f"Fatal crash: {e}"
 
     progress_bar.empty()
+
+    if failed_files:
+        with st.expander("Beberapa file gagal diekstrak (Klik untuk detail)"):
+            for p, err in failed_files.items():
+                st.write(f"- `{p}`: {err}")
 
     if not all_feat_dfs:
         st.error("Tidak ada data fitur yang berhasil diekstrak.")
