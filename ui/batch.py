@@ -28,7 +28,7 @@ from visualization.comparison_plots import ComparisonPlots
 # Worker: proses satu file EDF
 # ---------------------------------------------------------------------------
 
-def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
+def _process_single_edf(zip_source, edf_path, channels, subbands, features,
                          include_frequency=False,
                          use_amplitude=False, use_ica=False,
                          ica_n=None, ica_method="fastica",
@@ -63,9 +63,14 @@ def _process_single_edf(zip_bytes, edf_path, channels, subbands, features,
     loader = EEGLoader()
 
     try:
-        buf = io.BytesIO(zip_bytes)
-        loader.load_edf_from_zip(buf, edf_path)
-    except Exception:
+        if isinstance(zip_source, (str, bytes, os.PathLike)) and os.path.isfile(zip_source):
+            with open(zip_source, "rb") as f:
+                loader.load_edf_from_zip(f, edf_path)
+        else:
+            buf = io.BytesIO(zip_source)
+            loader.load_edf_from_zip(buf, edf_path)
+    except Exception as e:
+        print(f"Worker file error ({edf_path}): {e}")
         return None, [], None, None, None
 
     ch_list = channels if channels else loader.channel_names
@@ -293,6 +298,13 @@ def run_batch_processing(cfg):
         st.error("Tidak ditemukan file EDF dalam ZIP.")
         return
 
+    # Tulis zip_bytes ke temporary file untuk mencegah overhead IPC
+    # yang menyebabkan BrokenProcessPool di Windows.
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    temp_zip.write(zip_bytes)
+    temp_zip.close()
+    temp_zip_path = temp_zip.name
+
     all_dfs = []
     all_erd_dfs = []
     all_conn_dfs = []
@@ -312,46 +324,53 @@ def run_batch_processing(cfg):
     except Exception:
         PoolExecutor = ThreadPoolExecutor
 
-    with PoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _process_single_edf, zip_bytes, path,
-                channels, subbands, features, include_freq,
-                use_amplitude, use_ica, ica_n, ica_method,
-                psd_method, psd_fmin, psd_fmax, psd_n_fft,
-                use_epoching, epoch_mode, epoch_duration,
-                window_overlap, use_epoch_reject, epoch_reject_threshold,
-                use_connectivity, connectivity_method, connectivity_channels,
-                cache_dir,
-            ): path
-            for path in edf_list
-        }
+    try:
+        with PoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_single_edf, temp_zip_path, path,
+                    channels, subbands, features, include_freq,
+                    use_amplitude, use_ica, ica_n, ica_method,
+                    psd_method, psd_fmin, psd_fmax, psd_n_fft,
+                    use_epoching, epoch_mode, epoch_duration,
+                    window_overlap, use_epoch_reject, epoch_reject_threshold,
+                    use_connectivity, connectivity_method, connectivity_channels,
+                    cache_dir,
+                ): path
+                for path in edf_list
+            }
 
-        for i, future in enumerate(as_completed(futures), 1):
-            path = futures[future]
-            progress_bar.progress(
-                i / n_total,
-                text=f"Memproses {i}/{n_total}: {path.split('/')[-1]}",
-            )
-            try:
-                result = future.result()
-                if result is None:
-                    continue
-                feat_df, tasks_found, erd_df, conn_df, cache_info = result
-                if feat_df is not None and not feat_df.empty:
-                    all_dfs.append(feat_df)
-                    if not common_tasks:
-                        common_tasks = set(tasks_found)
-                    else:
-                        common_tasks |= set(tasks_found)
-                if erd_df is not None and not erd_df.empty:
-                    all_erd_dfs.append(erd_df)
-                if conn_df is not None and not conn_df.empty:
-                    all_conn_dfs.append(conn_df)
-                if cache_info is not None:
-                    all_cache_infos.append(cache_info)
-            except Exception:
-                pass
+            for i, future in enumerate(as_completed(futures), 1):
+                path = futures[future]
+                progress_bar.progress(
+                    i / n_total,
+                    text=f"Memproses {i}/{n_total}: {path.split('/')[-1]}",
+                )
+                try:
+                    result = future.result()
+                    if result is None:
+                        continue
+                    feat_df, tasks_found, erd_df, conn_df, cache_info = result
+                    if feat_df is not None and not feat_df.empty:
+                        all_dfs.append(feat_df)
+                        if not common_tasks:
+                            common_tasks = set(tasks_found)
+                        else:
+                            common_tasks |= set(tasks_found)
+                    if erd_df is not None and not erd_df.empty:
+                        all_erd_dfs.append(erd_df)
+                    if conn_df is not None and not conn_df.empty:
+                        all_conn_dfs.append(conn_df)
+                    if cache_info is not None:
+                        all_cache_infos.append(cache_info)
+                except Exception as e:
+                    print(f"Worker future exception on {path}: {e}")
+                    pass
+    finally:
+        try:
+            os.unlink(temp_zip_path)
+        except OSError:
+            pass
 
     progress_bar.empty()
 
