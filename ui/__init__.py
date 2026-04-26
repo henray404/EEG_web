@@ -6,6 +6,8 @@ Modul:
 - sidebar     : Panel konfigurasi sidebar
 - single_file : Analisis file EDF tunggal
 - batch       : Analisis batch (ZIP)
+- encoding    : Post-batch encoding (chunking + chain)
+- comparison  : Perbandingan chain encoding antar subjek
 """
 
 from ui.styles import inject_css
@@ -24,3 +26,4 @@ __all__ = [
     "run_batch_processing",
     "render_batch_results",
 ]
+

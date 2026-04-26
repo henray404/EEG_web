@@ -57,3 +57,6 @@ data/
 old_content.txt
 override*.py
 test.py
+
+# Agent files
+.agent/

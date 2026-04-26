@@ -88,6 +88,20 @@ DEFAULT_ENCODING_OVERLAP = 0.0  # tanpa overlap (baseline)
 EEGET_ALS_SFREQ = 128.0        # sampling frequency EEGET-ALS dataset
 EEGET_ALS_N_CHANNELS = 32      # jumlah channel EEGET-ALS dataset
 
+# Superlet TFR (Gamma burst extraction)
+SUPERLET_C_BASE = 3
+SUPERLET_ORDER_MIN = 1
+SUPERLET_ORDER_MAX = 6
+SUPERLET_N_FREQS = 10
+SUPERLET_FREQ_SPACING = "linear"  # "linear" | "log"
+
+# Gamma burst detection
+GAMMA_WINDOW_SECONDS = 1.0
+BURST_MAD_THRESHOLD = 2.0
+BURST_MIN_DURATION_MS = 25.0
+BURST_MERGE_GAP_MS = 25.0
+BURST_ENABLE_DEFAULT = False
+
 # Mapping skenario EEGET-ALS ke label numerik
 EEGET_ALS_SCENARIOS = {
     1: "Lifting left hand",

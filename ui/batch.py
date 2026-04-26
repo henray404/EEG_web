@@ -406,6 +406,9 @@ def run_batch_processing(cfg):
         "chunking_done", "chunking_features_df", "chunking_chain_df",
         "chunking_summary_df", "chunking_run_summary",
         "chunking_elapsed", "chunking_paths",
+        # Comparison state
+        "comparison_done", "comparison_summary_df",
+        "comparison_details_df", "comparison_elapsed", "comparison_meta",
     ):
         st.session_state.pop(key, None)
 
@@ -437,82 +440,13 @@ def render_batch_results(cfg):
     all_subbands = sorted(batch_df["subband"].unique().tolist()) if "subband" in batch_df.columns else []
     all_channels = sorted(batch_df["channel"].unique().tolist()) if "channel" in batch_df.columns else []
 
-    # Panel filter
-    with st.expander("Konfigurasi & Filter Batch", expanded=True):
-        # --- Select All / Hapus Semua helpers ---
-        def _select_all(key, options):
-            st.session_state[key] = list(options)
-        def _clear_all(key):
-            st.session_state[key] = []
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            active_category = "Semua"
-            if len(categories) > 1:
-                cat_counts = batch_df.groupby("category")["subject"].nunique()
-                cat_labels = [f"Semua ({batch_df['subject'].nunique()})"]
-                for cat in categories:
-                    cat_labels.append(f"{cat} ({cat_counts.get(cat, 0)})")
-                selected_cat_label = st.selectbox("Kategori", cat_labels, key="cat_filter")
-                if not selected_cat_label.startswith("Semua"):
-                    active_category = selected_cat_label.split(" (")[0]
-            elif categories:
-                active_category = categories[0]
-
-        with col2:
-            selected_scenarios = scenarios
-            if len(scenarios) > 1:
-                sa1, sa2 = st.columns(2)
-                sa1.button("Semua", key="sa_sc", on_click=_select_all, args=("scenario_filter", scenarios))
-                sa2.button("Hapus", key="cl_sc", on_click=_clear_all, args=("scenario_filter",))
-                selected_scenarios = st.multiselect("Filter Skenario", scenarios, default=[], key="scenario_filter")
-            st.markdown("---")
-            selected_subbands = all_subbands
-            if all_subbands:
-                sb1, sb2 = st.columns(2)
-                sb1.button("Semua", key="sa_sb", on_click=_select_all, args=("batch_subband", all_subbands))
-                sb2.button("Hapus", key="cl_sb", on_click=_clear_all, args=("batch_subband",))
-                selected_subbands = st.multiselect("Filter Subband", all_subbands, default=[], key="batch_subband")
-
-        with col3:
-            selected_times = times
-            if len(times) > 1:
-                ta1, ta2 = st.columns(2)
-                ta1.button("Semua", key="sa_tm", on_click=_select_all, args=("time_filter", times))
-                ta2.button("Hapus", key="cl_tm", on_click=_clear_all, args=("time_filter",))
-                selected_times = st.multiselect("Filter Time", times, default=[], key="time_filter")
-            st.markdown("---")
-            selected_channels_batch = all_channels
-            if all_channels:
-                ca1, ca2 = st.columns(2)
-                ca1.button("Semua", key="sa_ch", on_click=_select_all, args=("batch_channel", all_channels))
-                ca2.button("Hapus", key="cl_ch", on_click=_clear_all, args=("batch_channel",))
-                selected_channels_batch = st.multiselect("Filter Channel", all_channels, default=[], key="batch_channel")
-
-    # Aplikasikan filter
-    filtered_df = batch_df.copy()
-    if active_category != "Semua":
-        filtered_df = filtered_df[filtered_df["category"] == active_category]
-    if selected_scenarios:
-        filtered_df = filtered_df[filtered_df["scenario"].isin(selected_scenarios)]
-    if selected_times:
-        filtered_df = filtered_df[filtered_df["time"].isin(selected_times)]
-    if selected_subbands:
-        filtered_df = filtered_df[filtered_df["subband"].isin(selected_subbands)]
-    if selected_channels_batch:
-        filtered_df = filtered_df[filtered_df["channel"].isin(selected_channels_batch)]
-
-    meta_cols = {"filename", "category", "subject", "time", "scenario", "task", "channel", "subband"}
-    feat_cols = [c for c in filtered_df.columns if c not in meta_cols]
-
-    # Ringkasan
+    # Ringkasan Batch (selalu ditampilkan di atas)
     st.markdown('<p class="section-title">Ringkasan Batch</p>', unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Kategori", active_category)
-    c2.metric("Subjek", filtered_df["subject"].nunique() if "subject" in filtered_df.columns else "-")
+    c1.metric("Kategori", categories[0] if len(categories) == 1 else f"{len(categories)} kategori")
+    c2.metric("Subjek", batch_df["subject"].nunique() if "subject" in batch_df.columns else "-")
     c3.metric("Task Ditemukan", len(batch_tasks))
-    c4.metric("Total Baris", f"{len(filtered_df):,}")
+    c4.metric("Total Baris", f"{len(batch_df):,}")
 
     # Task badges
     badge_html = ""
@@ -521,23 +455,103 @@ def render_batch_results(cfg):
         badge_html += f'<span class="task-badge" style="background:{color}">{t}</span>'
     st.markdown(f'<div style="margin:8px 0">{badge_html}</div>', unsafe_allow_html=True)
 
-    # Tab: Analisis Delta + Fitur + ERD/ERS
-    _render_delta_tab(
-        filtered_df, batch_df, batch_tasks, feat_cols,
-        categories, selected_scenarios, selected_times,
-    )
+    # ================================================================ #
+    #  Tab Navigation: Delta | Encoding                                #
+    # ================================================================ #
+    tab_delta, tab_encoding = st.tabs([
+        "📊 Perbandingan Delta antar Task",
+        "🔗 Encoding",
+    ])
 
-    # Tabel Fitur per Task (non-delta)
-    _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols)
+    # ---- Tab 1: Delta ----
+    with tab_delta:
+        # Panel filter (hanya untuk delta tab)
+        with st.expander("Konfigurasi & Filter Batch", expanded=True):
+            # --- Select All / Hapus Semua helpers ---
+            def _select_all(key, options):
+                st.session_state[key] = list(options)
+            def _clear_all(key):
+                st.session_state[key] = []
 
-    # ERD/ERS
-    _render_erd_ers(filtered_df, batch_tasks, feat_cols)
+            col1, col2, col3 = st.columns(3)
 
-    # Connectivity (PLI/wPLI)
-    _render_connectivity_batch(filtered_df)
+            with col1:
+                active_category = "Semua"
+                if len(categories) > 1:
+                    cat_counts = batch_df.groupby("category")["subject"].nunique()
+                    cat_labels = [f"Semua ({batch_df['subject'].nunique()})"]
+                    for cat in categories:
+                        cat_labels.append(f"{cat} ({cat_counts.get(cat, 0)})")
+                    selected_cat_label = st.selectbox("Kategori", cat_labels, key="cat_filter")
+                    if not selected_cat_label.startswith("Semua"):
+                        active_category = selected_cat_label.split(" (")[0]
+                elif categories:
+                    active_category = categories[0]
 
-    # Post-batch: Epoching + Encoding (sliding window / chunking)
-    render_post_batch_encoding()
+            with col2:
+                selected_scenarios = scenarios
+                if len(scenarios) > 1:
+                    sa1, sa2 = st.columns(2)
+                    sa1.button("Semua", key="sa_sc", on_click=_select_all, args=("scenario_filter", scenarios))
+                    sa2.button("Hapus", key="cl_sc", on_click=_clear_all, args=("scenario_filter",))
+                    selected_scenarios = st.multiselect("Filter Skenario", scenarios, default=[], key="scenario_filter")
+                st.markdown("---")
+                selected_subbands = all_subbands
+                if all_subbands:
+                    sb1, sb2 = st.columns(2)
+                    sb1.button("Semua", key="sa_sb", on_click=_select_all, args=("batch_subband", all_subbands))
+                    sb2.button("Hapus", key="cl_sb", on_click=_clear_all, args=("batch_subband",))
+                    selected_subbands = st.multiselect("Filter Subband", all_subbands, default=[], key="batch_subband")
+
+            with col3:
+                selected_times = times
+                if len(times) > 1:
+                    ta1, ta2 = st.columns(2)
+                    ta1.button("Semua", key="sa_tm", on_click=_select_all, args=("time_filter", times))
+                    ta2.button("Hapus", key="cl_tm", on_click=_clear_all, args=("time_filter",))
+                    selected_times = st.multiselect("Filter Time", times, default=[], key="time_filter")
+                st.markdown("---")
+                selected_channels_batch = all_channels
+                if all_channels:
+                    ca1, ca2 = st.columns(2)
+                    ca1.button("Semua", key="sa_ch", on_click=_select_all, args=("batch_channel", all_channels))
+                    ca2.button("Hapus", key="cl_ch", on_click=_clear_all, args=("batch_channel",))
+                    selected_channels_batch = st.multiselect("Filter Channel", all_channels, default=[], key="batch_channel")
+
+        # Aplikasikan filter
+        filtered_df = batch_df.copy()
+        if active_category != "Semua":
+            filtered_df = filtered_df[filtered_df["category"] == active_category]
+        if selected_scenarios:
+            filtered_df = filtered_df[filtered_df["scenario"].isin(selected_scenarios)]
+        if selected_times:
+            filtered_df = filtered_df[filtered_df["time"].isin(selected_times)]
+        if selected_subbands:
+            filtered_df = filtered_df[filtered_df["subband"].isin(selected_subbands)]
+        if selected_channels_batch:
+            filtered_df = filtered_df[filtered_df["channel"].isin(selected_channels_batch)]
+
+        meta_cols = {"filename", "category", "subject", "time", "scenario", "task", "channel", "subband"}
+        feat_cols = [c for c in filtered_df.columns if c not in meta_cols]
+
+        # Tab: Analisis Delta + Fitur + ERD/ERS
+        _render_delta_tab(
+            filtered_df, batch_df, batch_tasks, feat_cols,
+            categories, selected_scenarios, selected_times,
+        )
+
+        # Tabel Fitur per Task (non-delta)
+        _render_feature_per_task_table(filtered_df, batch_tasks, feat_cols)
+
+        # ERD/ERS
+        _render_erd_ers(filtered_df, batch_tasks, feat_cols)
+
+        # Connectivity (PLI/wPLI)
+        _render_connectivity_batch(filtered_df)
+
+    # ---- Tab 2: Encoding ----
+    with tab_encoding:
+        render_post_batch_encoding()
 
 
 # ---------------------------------------------------------------------------

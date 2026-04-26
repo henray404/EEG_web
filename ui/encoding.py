@@ -1,4 +1,4 @@
-﻿"""
+"""
 Modul UI encoding â€” Step Post-Batch: Chunking + Chain Encoding.
 
 Dipanggil setelah ``run_batch_processing`` selesai. Memakai cache
@@ -158,7 +158,7 @@ def render_post_batch_encoding():
     col_info.info("Chunking mode: non-overlapping (tanpa overlap).")
 
     # --- Feature options ---
-    col_feat1, col_feat2 = st.columns(2)
+    col_feat1, col_feat2, col_feat3 = st.columns(3)
     use_task_segmentation = col_feat1.toggle(
         "Task Segmentation",
         value=True,
@@ -169,6 +169,13 @@ def render_post_batch_encoding():
         "Fitur Frequency-Domain",
         value=True,
         help="Tambahkan band_power, relative_power, peak_frequency.",
+    )
+    scale_x10k = col_feat3.toggle(
+        "Scale ×10.000",
+        value=False,
+        help="Kalikan semua nilai fitur dengan 10.000 sebelum chain encoding. "
+             "Hasilnya ditambahkan sebagai kolom chain_sequence_x10k dan "
+             "chain_ratio_x10k di CSV yang sama untuk perbandingan.",
     )
 
     all_features = list(DEFAULT_CHUNK_FEATURES)
@@ -232,6 +239,7 @@ def render_post_batch_encoding():
             use_task_segmentation=use_task_segmentation,
             chain_features=chain_features,
             subbands=passed_subbands,
+            scale_x10k=scale_x10k,
         )
 
     # ============================================================== #
@@ -241,13 +249,18 @@ def render_post_batch_encoding():
     if st.session_state.get("chunking_done"):
         _render_chunking_results()
 
+        # Perbandingan chain encoding antar subjek
+        from ui.comparison import render_comparison_section
+        render_comparison_section()
+
 
 # ------------------------------------------------------------------ #
 #  Run: Chunking + Chain Encoding                                     #
 # ------------------------------------------------------------------ #
 
 def _run_chunking(items, chunk_duration, include_freq,
-                  use_task_segmentation, chain_features, subbands):
+                  use_task_segmentation, chain_features, subbands,
+                  scale_x10k=False):
     """Jalankan chunking + chain encoding dari cached items."""
 
     # Clear stale state (termasuk key lama dari pipeline simple yang sudah dihapus)
@@ -258,6 +271,9 @@ def _run_chunking(items, chunk_duration, include_freq,
         "chunking_features_df",
         "encoding_done", "encoding_result", "encoding_summary",
         "encoding_elapsed", "encoding_output_path", "encoding_raw",
+        # Comparison state (clear saat re-encode)
+        "comparison_done", "comparison_summary_df",
+        "comparison_details_df", "comparison_elapsed", "comparison_meta",
     ):
         st.session_state.pop(key, None)
 
@@ -287,6 +303,7 @@ def _run_chunking(items, chunk_duration, include_freq,
         features=features,
         chain_features=chain_features,
         use_task_segmentation=use_task_segmentation,
+        scale_x10k=scale_x10k,
         progress_callback=progress_callback,
     )
 

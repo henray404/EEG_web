@@ -20,6 +20,8 @@ from processing.epoching import EpochEngine
 from processing.connectivity import ConnectivityAnalyzer
 from processing.delta import DeltaCalculator
 from processing.statistics import StatisticalTests
+from processing.superlets import SuperletTFR
+from processing.gamma_bursts import GammaBurstDetector
 
 __all__ = [
     "EEGLoader",
@@ -30,6 +32,8 @@ __all__ = [
     "ConnectivityAnalyzer",
     "DeltaCalculator",
     "StatisticalTests",
+    "SuperletTFR",
+    "GammaBurstDetector",
 ]
 
 

@@ -19,12 +19,161 @@ import mne
 from config import (
     DEFAULT_SUBBANDS, DEFAULT_FEATURES,
     DEFAULT_ENCODING_WINDOW, DEFAULT_ENCODING_OVERLAP,
+    SUPERLET_C_BASE, SUPERLET_ORDER_MIN, SUPERLET_ORDER_MAX,
+    SUPERLET_N_FREQS, SUPERLET_FREQ_SPACING,
+    GAMMA_WINDOW_SECONDS,
+    BURST_ENABLE_DEFAULT,
     EEGET_ALS_SCENARIOS,
 )
 from processing.epoching import EpochEngine
 from processing.loader import EEGLoader
+from processing.superlets import SuperletTFR, build_frequency_grid
+from processing.gamma_bursts import GammaBurstDetector
 
 logger = logging.getLogger(__name__)
+
+
+GAMMA_BURST_COLUMNS = (
+    "burst_count",
+    "burst_peak_amp",
+    "burst_duration_ratio",
+    "burst_mean_freq",
+)
+
+_DEFAULT_BURST_STATS = {
+    "burst_count": 0,
+    "burst_peak_amp": 0.0,
+    "burst_duration_ratio": 0.0,
+    "burst_mean_freq": float("nan"),
+}
+
+
+def _resolve_gamma_band(subbands):
+    """Resolve gamma band bounds from subbands config."""
+    if isinstance(subbands, dict) and "Gamma" in subbands:
+        return subbands["Gamma"]
+    return 30.0, 49.5
+
+
+def _window_sample_bounds(window, sfreq, signal_start_time, n_samples):
+    """Convert window metadata into inclusive sample bounds."""
+    win_df = window.get("data")
+    if isinstance(win_df, pd.DataFrame) and not win_df.empty:
+        idx_vals = win_df.index.to_numpy()
+        if idx_vals.size > 0 and np.issubdtype(idx_vals.dtype, np.number):
+            start = int(round(float(idx_vals[0])))
+            end = int(round(float(idx_vals[-1])))
+            start = max(0, min(start, n_samples - 1))
+            end = max(start, min(end, n_samples - 1))
+            return start, end
+
+    start_time = float(window.get("start_time", signal_start_time))
+    end_time = float(window.get("end_time", start_time))
+    start = int(round((start_time - signal_start_time) * sfreq))
+    end = int(round((end_time - signal_start_time) * sfreq))
+    start = max(0, min(start, n_samples - 1))
+    end = max(start, min(end, n_samples - 1))
+    return start, end
+
+
+def _compute_gamma_window_stats(raw_df, windows, channels, sfreq, subbands):
+    """Compute burst features for each (window_idx, channel) key."""
+    if raw_df.empty or not windows or not channels:
+        return {}
+
+    gamma_low, gamma_high = _resolve_gamma_band(subbands)
+    freqs = build_frequency_grid(
+        low=gamma_low,
+        high=gamma_high,
+        n_freqs=SUPERLET_N_FREQS,
+        spacing=SUPERLET_FREQ_SPACING,
+    )
+
+    superlet = SuperletTFR(
+        sfreq=sfreq,
+        freqs=freqs,
+        c_base=SUPERLET_C_BASE,
+        order_min=SUPERLET_ORDER_MIN,
+        order_max=SUPERLET_ORDER_MAX,
+    )
+    detector = GammaBurstDetector(sfreq=sfreq, freqs=freqs)
+
+    bursts_by_channel = {}
+    for ch in channels:
+        if ch not in raw_df.columns:
+            continue
+        signal = raw_df[ch].to_numpy(dtype=float)
+        if signal.size < 4:
+            bursts_by_channel[ch] = []
+            continue
+        tfr = superlet.compute(signal)
+        bursts_by_channel[ch] = detector.detect(tfr)
+
+    n_samples = len(raw_df)
+    signal_start_time = (
+        float(raw_df["time"].iloc[0])
+        if "time" in raw_df.columns and not raw_df.empty
+        else 0.0
+    )
+    half_gamma_samples = max(1, int(round((GAMMA_WINDOW_SECONDS * sfreq) / 2.0)))
+
+    stats_by_window_channel = {}
+    for win in windows:
+        window_idx = int(win.get("window_idx", -1))
+        start_sample, end_sample = _window_sample_bounds(
+            win,
+            sfreq=sfreq,
+            signal_start_time=signal_start_time,
+            n_samples=n_samples,
+        )
+        center = (start_sample + end_sample) // 2
+        gamma_start = max(0, center - half_gamma_samples)
+        gamma_end = min(n_samples - 1, center + half_gamma_samples)
+
+        for ch in channels:
+            bursts = bursts_by_channel.get(ch, [])
+            stats_by_window_channel[(window_idx, ch)] = detector.aggregate_in_window(
+                bursts,
+                window_start_sample=gamma_start,
+                window_end_sample=gamma_end,
+            )
+
+    return stats_by_window_channel
+
+
+def _append_gamma_burst_features(feat_df, stats_by_window_channel):
+    """Append gamma burst columns to feature dataframe."""
+    if feat_df.empty:
+        return feat_df
+
+    result = feat_df.copy()
+    for col in GAMMA_BURST_COLUMNS:
+        result[col] = np.nan
+
+    gamma_mask = result["subband"].astype(str).eq("Gamma")
+    gamma_indices = result.index[gamma_mask]
+    if len(gamma_indices) == 0:
+        return result
+
+    burst_count = []
+    burst_peak_amp = []
+    burst_duration_ratio = []
+    burst_mean_freq = []
+
+    for row_idx in gamma_indices:
+        row = result.loc[row_idx]
+        key = (int(row["window_idx"]), row["channel"])
+        stats = stats_by_window_channel.get(key, _DEFAULT_BURST_STATS)
+        burst_count.append(stats.get("burst_count", 0))
+        burst_peak_amp.append(stats.get("burst_peak_amp", 0.0))
+        burst_duration_ratio.append(stats.get("burst_duration_ratio", 0.0))
+        burst_mean_freq.append(stats.get("burst_mean_freq", float("nan")))
+
+    result.loc[gamma_indices, "burst_count"] = burst_count
+    result.loc[gamma_indices, "burst_peak_amp"] = burst_peak_amp
+    result.loc[gamma_indices, "burst_duration_ratio"] = burst_duration_ratio
+    result.loc[gamma_indices, "burst_mean_freq"] = burst_mean_freq
+    return result
 
 
 # ------------------------------------------------------------------ #
@@ -34,6 +183,7 @@ logger = logging.getLogger(__name__)
 def encode_single_edf(edf_path, window_size=None, overlap=None,
                       subbands=None, features=None,
                       include_frequency=True,
+                      include_gamma_bursts=BURST_ENABLE_DEFAULT,
                       psd_method="welch", psd_fmin=0.0, psd_fmax=49.0):
     """Encode satu file EDF menjadi DataFrame fitur per window.
 
@@ -51,6 +201,8 @@ def encode_single_edf(edf_path, window_size=None, overlap=None,
         Fitur time-domain.
     include_frequency : bool
         Hitung fitur frequency-domain (band_power, relative_power, peak_frequency).
+    include_gamma_bursts : bool
+        Tambahkan fitur burst gamma (count, peak, duration ratio, mean freq).
     psd_method : str
         Metode PSD ('welch' atau 'multitaper').
     psd_fmin, psd_fmax : float
@@ -102,6 +254,23 @@ def encode_single_edf(edf_path, window_size=None, overlap=None,
         include_frequency=include_frequency,
         psd_method=psd_method, psd_fmin=psd_fmin, psd_fmax=psd_fmax,
     )
+
+    if include_gamma_bursts and not feat_df.empty:
+        try:
+            stats_by_window_channel = _compute_gamma_window_stats(
+                raw_df=df,
+                windows=windows,
+                channels=channels,
+                sfreq=sfreq,
+                subbands=subbands,
+            )
+        except Exception as exc:
+            logger.warning("Gamma burst extraction gagal pada %s: %s", edf_path, exc)
+            stats_by_window_channel = {}
+        feat_df = _append_gamma_burst_features(
+            feat_df,
+            stats_by_window_channel=stats_by_window_channel,
+        )
 
     metadata = {
         "sfreq": sfreq,
@@ -243,6 +412,7 @@ def encode_dataset(dataset_root, subject_range=None, scenarios=None,
                    window_size=None, overlap=None,
                    subbands=None, features=None,
                    include_frequency=True,
+                   include_gamma_bursts=BURST_ENABLE_DEFAULT,
                    psd_method="welch", psd_fmin=0.0, psd_fmax=49.0,
                    progress_callback=None):
     """Encode seluruh EEGET-ALS dataset menjadi satu DataFrame besar.
@@ -260,6 +430,8 @@ def encode_dataset(dataset_root, subject_range=None, scenarios=None,
     subbands, features : dict, list
         Parameter feature extraction.
     include_frequency : bool
+    include_gamma_bursts : bool
+        Tambahkan fitur burst gamma pada baris subband Gamma.
     psd_method, psd_fmin, psd_fmax : parameter PSD.
     progress_callback : callable | None
         Fungsi callback(subject_id, scenario, current, total) untuk progress bar.
@@ -298,6 +470,7 @@ def encode_dataset(dataset_root, subject_range=None, scenarios=None,
                 edf_path, window_size=window_size, overlap=overlap,
                 subbands=subbands, features=features,
                 include_frequency=include_frequency,
+                include_gamma_bursts=include_gamma_bursts,
                 psd_method=psd_method, psd_fmin=psd_fmin, psd_fmax=psd_fmax,
             )
 
@@ -345,6 +518,7 @@ def encode_dataset(dataset_root, subject_range=None, scenarios=None,
 def encode_cached_items(cached_items, window_size=None, overlap=None,
                          subbands=None, features=None,
                          include_frequency=True,
+                         include_gamma_bursts=BURST_ENABLE_DEFAULT,
                          psd_method="welch", psd_fmin=0.0, psd_fmax=49.0,
                          progress_callback=None):
     """Encode dari cached items (hasil batch ZIP yang sudah di-preprocess).
@@ -431,6 +605,27 @@ def encode_cached_items(cached_items, window_size=None, overlap=None,
             include_frequency=include_frequency,
             psd_method=psd_method, psd_fmin=psd_fmin, psd_fmax=psd_fmax,
         )
+
+        if include_gamma_bursts and not feat_df.empty:
+            try:
+                stats_by_window_channel = _compute_gamma_window_stats(
+                    raw_df=raw_df,
+                    windows=windows,
+                    channels=channels,
+                    sfreq=sfreq,
+                    subbands=subbands,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Gamma burst extraction gagal untuk %s: %s",
+                    item.get("filename"),
+                    exc,
+                )
+                stats_by_window_channel = {}
+            feat_df = _append_gamma_burst_features(
+                feat_df,
+                stats_by_window_channel=stats_by_window_channel,
+            )
 
         if feat_df.empty:
             n_failed += 1
